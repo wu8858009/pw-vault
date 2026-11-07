@@ -294,6 +294,11 @@
     await persist();
     S.lastAct = Date.now();
     renderMain();
+    const pc = S.pendingCloud;
+    if (pc) {
+      S.pendingCloud = null;
+      connectCloud(pc.url, pc.key).then(() => toast('已建立並連上 Google 雲端', 4000)).catch(e => toast('連線 Google 失敗：' + e.message, 6000));
+    }
   }
   async function restoreFromFile(text) {
     if (!PV.isVaultText(text)) return toast('這不是本系統的備份檔（.pwvault）');
@@ -623,6 +628,7 @@
       <input id="c_url" value="${esc(preset)}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" inputmode="url">
       <label class="f">同步密碼</label><input id="c_key" type="password" autocomplete="off" ${preset ? 'autofocus' : ''}>
       <div id="c_err" style="color:var(--danger);min-height:1.4em;margin-top:6px"></div>
+      <button id="c_first" class="primary hidden" style="width:100%">這是第一台：建立新密碼庫並連上這個雲端</button>
       <div class="btns"><button id="c_no">取消</button><button class="primary" id="c_ok">${download ? '下載' : '連線並同步'}</button></div>`, d => {
       $('#c_no', d).onclick = closeModal;
       const go = async () => {
@@ -634,7 +640,7 @@
             if (!okCloudUrl(url)) throw new Error('網址格式不對');
             const cfg = { url, key, rev: 0, dirty: false };
             const l = await cloudCall({ a: 'load' }, cfg);
-            if (!l.vault) throw new Error('雲端還沒有資料，請先在已有資料的裝置上「連線 Google 雲端」');
+            if (!l.vault) throw Object.assign(new Error('雲端還沒有資料'), { empty: true });
             await Store.save(l.vault);
             cfg.rev = l.rev; cfg.at = Date.now(); Cloud.cfg = cfg; await Cloud.save();
             closeModal(); toast('已下載，請輸入主密碼解鎖', 4000); renderUnlock();
@@ -644,8 +650,20 @@
             toast('已連線並同步完成', 4000);
           }
         } catch (e) {
-          if (download) { $('#c_ok', d).disabled = false; err(e.message); }
-          else toast('連線失敗：' + e.message, 6000);
+          if (!download) return toast('連線失敗：' + e.message, 6000);
+          $('#c_ok', d).disabled = false;
+          if (e.empty || e.message === '雲端還沒設定同步密碼') {
+            // 雲端是空的：這是第一台裝置，改成建立新密碼庫，建好後自動用這組同步密碼連線
+            err('雲端還是空的，看起來這是第一台裝置。');
+            const b = $('#c_first', d); b.classList.remove('hidden');
+            b.onclick = () => {
+              if ((key || '').length < 6) return err('同步密碼至少 6 個字');
+              S.pendingCloud = { url, key };
+              closeModal();
+              const m = $('#err'); if (m) { m.style.color = 'var(--accent)'; m.textContent = '設定主密碼並按「建立」，完成後會自動連上 Google 雲端。'; }
+              const p = $('#p1'); if (p) p.focus();
+            };
+          } else err(e.message);
         }
       };
       $('#c_ok', d).onclick = go;
