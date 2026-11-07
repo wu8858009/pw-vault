@@ -1,7 +1,7 @@
 /* 帳號密碼紀錄系統 — 介面（PWA 與桌面 exe 共用） */
 (function () {
   'use strict';
-  const VERSION = '1.0.0';
+  const VERSION = '1.2.0';
   const qs = new URLSearchParams(location.search);
   const DESKTOP = qs.has('desktop');
   const SELFTEST = qs.has('selftest');
@@ -85,13 +85,14 @@
   function setSync(state, msg) {
     S.sync = { state, msg: msg || '' };
     const el = $('#syncst'); if (el) el.outerHTML = syncHtml();
+    if (state !== 'busy' && S.data && !S.v.sel && !S.v.edit && $('.overview')) renderDetail();
   }
   function syncHtml() {
     const c = Cloud.cfg, s = S.sync;
-    if (!c) return '<a id="syncst" data-act="cloudset" class="sync"><span>☁ 未連線 Google</span></a>';
+    if (!c) return `<a id="syncst" data-act="cloudset" class="sync off"><span class="dot"></span><span class="lbl">未連線 Google 雲端</span>${I('cloud', 'sm')}</a>`;
     const t = c.at ? fmtTime(c.at).slice(11) : '';
-    const txt = s.state === 'busy' ? '☁ 同步中…' : s.state === 'err' ? '⚠ 同步失敗' : c.dirty ? '☁ 等待上傳' : `☁ 已同步 ${t}`;
-    return `<a id="syncst" data-act="syncnow" class="sync ${s.state === 'err' ? 'bad' : ''}" title="${esc(s.msg || '點一下立即同步')}"><span>${txt}</span></a>`;
+    const [cls, txt] = s.state === 'busy' ? ['busy', '同步中…'] : s.state === 'err' ? ['bad', '同步失敗'] : c.dirty ? ['wait', '等待上傳'] : ['', `已同步 ${t}`];
+    return `<a id="syncst" data-act="syncnow" class="sync ${cls}" title="${esc(s.msg || '點一下立即同步')}"><span class="dot"></span><span class="lbl">${txt}</span>${I('refresh', 'sm')}</a>`;
   }
   let syncBusy = false, syncAgain = false, syncTimer = 0;
   function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
@@ -175,12 +176,51 @@
   let toastT;
   function toast(msg, ms) {
     const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
+    t.classList.toggle('bad', /失敗|錯誤|⚠|不對|無法/.test(msg));
     clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), ms || 2600);
   }
+  // 線條圖示（24×24，currentColor）
+  const ICONS = {
+    all: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    star: '<path d="M12 2.8l2.85 5.78 6.38.93-4.62 4.5 1.09 6.35L12 17.36l-5.7 3 1.09-6.35-4.62-4.5 6.38-.93z"/>',
+    folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>',
+    inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+    hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
+    alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/>',
+    repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+    dice: '<rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor"/>',
+    sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+    lock: '<rect x="3" y="11" width="18" height="11" rx="2.5"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+    refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5M3 21v-5h5"/>',
+    search: '<circle cx="11" cy="11" r="7.5"/><path d="m21 21-4.3-4.3"/>',
+    plus: '<path d="M5 12h14M12 5v14"/>',
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    ext: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    dup: '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2M15 12v6M12 15h6"/>',
+    trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/>',
+    back: '<path d="m15 18-6-6 6-6"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>',
+    key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    note: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>',
+    clock: '<circle cx="12" cy="12" r="9.5"/><path d="M12 6.5V12l3.5 2"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+    file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+    info: '<circle cx="12" cy="12" r="9.5"/><path d="M12 16v-4M12 8h.01"/>',
+    x: '<path d="M18 6 6 18M6 6l12 12"/>'
+  };
+  function I(name, cls) { return `<svg class="i ${cls || ''}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`; }
   function hue(s) { let h = 0; for (const c of s || '?') h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
-  function avatar(e, cls) {
-    const ch = ([...(e.title || '?').trim()][0] || '?').toUpperCase();
-    return `<div class="${cls || 'av'}" style="background:hsl(${hue(e.title)} 45% 45%)">${esc(ch)}</div>`;
+  function avatar(e) {
+    const ch = ([...(e.title || '?').trim()][0] || '?').toUpperCase(), h = hue(e.title);
+    return `<div class="av" style="background:linear-gradient(135deg,hsl(${h} 62% 52%),hsl(${(h + 28) % 360} 58% 40%))">${esc(ch)}</div>`;
   }
   function fmtTime(t) {
     if (!t) return '';
@@ -191,9 +231,12 @@
   function normUrl(u) { u = (u || '').trim(); if (!u) return ''; return /^[a-z][a-z0-9+.-]*:/i.test(u) ? u : 'https://' + u; }
   function meter(pw) {
     const s = PV.strength(pw);
-    return `<div class="meter"><i class="bg${s.score}" style="width:${pw ? (s.score + 1) * 20 : 0}%"></i></div>
-      <div class="sl s${s.score}">${pw ? `強度：${s.label}（約 ${s.bits} bits）` : ''}</div>`;
+    return `<div class="meter s${s.score} ${pw ? '' : 'empty'}"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="sl">${pw ? `強度 <b class="s${s.score}">${s.label}</b>　約 ${s.bits} bits` : ''}</div>`;
   }
+  function strengthBadge(s) { return `<span class="badge ${s.score >= 3 ? 'ok' : s.score === 2 ? 'warn' : 'bad'}">${I('shield', 'sm')}${s.label}</span>`; }
+  // 對話框標題：圖示 + 文字
+  function dh(icon, title, bad) { return `<h3><span class="hi ${bad ? 'bad' : ''}">${I(icon)}</span>${esc(title)}</h3>`; }
   function defaults(d) {
     d = d || {};
     d.v = 1; d.entries = d.entries || []; d.deleted = d.deleted || {};
@@ -242,14 +285,14 @@
   }
   function confirmBox(title, msg, okText, danger) {
     return new Promise(res => {
-      openModal(`<h3>${esc(title)}</h3><div>${msg}</div><div class="btns">
-        <button data-r="0">取消</button><button data-r="1" class="${danger ? 'primary danger' : 'primary'}" style="${danger ? 'background:var(--danger);border-color:var(--danger)' : ''}" autofocus>${esc(okText || '確定')}</button></div>`,
+      openModal(`${dh(danger ? 'alert' : 'info', title, danger)}<div style="color:var(--text-2)">${msg}</div><div class="btns">
+        <button data-r="0">取消</button><button data-r="1" class="${danger ? 'danger-solid' : 'primary'}" autofocus>${esc(okText || '確定')}</button></div>`,
       d => d.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { closeModal(); res(b.dataset.r === '1'); }));
     });
   }
   function promptPw(title, msg) {
     return new Promise(res => {
-      openModal(`<h3>${esc(title)}</h3><div class="muted">${msg || ''}</div>
+      openModal(`${dh('key', title)}<div class="muted">${msg || ''}</div>
         <input type="password" id="pp" autocomplete="off" autofocus style="margin-top:10px">
         <div class="btns"><button data-r="0">取消</button><button data-r="1" class="primary">確定</button></div>`, d => {
         const done = ok => { const v = $('#pp', d).value; closeModal(); res(ok ? v : null); };
@@ -260,21 +303,38 @@
   }
 
   /* ---------- 建立 / 解鎖 ---------- */
+  function authShell(inner) {
+    return `<div class="auth">
+      <aside class="auth-brand">
+        <div class="logo"><img src="icons/icon-192.png" alt="">帳號密碼紀錄 <span class="pro">PRO</span></div>
+        <h1>你的所有帳號密碼，<br><span>只有你打得開。</span></h1>
+        <p class="lead">企業等級加密的密碼保管箱，電腦與手機即時同步。</p>
+        <div class="feats">
+          <div class="feat"><div class="fi">${I('shield')}</div><div><b>AES-256-GCM 端對端加密</b><small>主密碼經 60 萬次 PBKDF2 衍生金鑰，只在本機解密</small></div></div>
+          <div class="feat"><div class="fi">${I('cloud')}</div><div><b>Google 雲端同步</b><small>雲端只存密文，多台裝置自動合併</small></div></div>
+          <div class="feat"><div class="fi">${I('lock')}</div><div><b>自動上鎖・剪貼簿清除</b><small>閒置即上鎖，複製的密碼數秒後清除</small></div></div>
+        </div>
+        <div class="auth-foot">v${VERSION}${DESKTOP ? ' · Windows' : ' · Web'} · 零知識架構，沒有後門</div>
+      </aside>
+      <main class="auth-main"><div class="auth-card">${inner}</div></main>
+    </div>`;
+  }
   function renderSetup() {
-    app.innerHTML = `<div class="center"><div class="lock-card">
-      <h1><img src="icons/icon-192.png" alt="">建立密碼庫</h1>
-      <div class="muted">設定一組「主密碼」來加密所有資料。<b>主密碼忘記就無法復原</b>，請務必記好。</div>
-      <label class="f">主密碼（建議 10 字以上）</label>
+    app.innerHTML = authShell(`
+      <h2>建立密碼庫</h2>
+      <div class="sub">設定一組主密碼，用來加密你所有的資料。</div>
+      <div class="notice">${I('alert', 'sm')}<span>主密碼<b>忘記就無法復原</b>，系統沒有任何後門，請務必牢記。</span></div>
+      <label class="f">主密碼（建議 12 字以上）</label>
       <input type="password" id="p1" autocomplete="new-password" autofocus>
       <div id="m1">${meter('')}</div>
-      <label class="f">再輸入一次</label>
+      <label class="f">確認主密碼</label>
       <input type="password" id="p2" autocomplete="new-password">
       <div class="err" id="err"></div>
-      <button class="primary" id="go">建立</button>
-      <div style="margin-top:14px;text-align:center;line-height:2">
-        <a href="#" id="fromcloud">☁ 已經在別台裝置用過？從 Google 雲端下載</a><br>
-        <a href="#" id="restore" class="muted">或從備份檔（.pwvault）還原</a></div>
-    </div></div>`;
+      <button class="primary block" id="go">${I('shield')}建立加密密碼庫</button>
+      <div class="auth-alt">
+        <button id="fromcloud">${I('cloud')}已在別台裝置使用？從 Google 雲端下載</button>
+        <button id="restore" class="ghost">${I('upload')}從備份檔（.pwvault）還原</button>
+      </div>`);
     $('#fromcloud').onclick = e => { e.preventDefault(); cloudDialog(true); };
     const p1 = $('#p1'), p2 = $('#p2');
     p1.oninput = () => { $('#m1').innerHTML = meter(p1.value); };
@@ -310,16 +370,17 @@
   }
 
   function renderUnlock() {
-    app.innerHTML = `<div class="center"><div class="lock-card">
-      <h1><img src="icons/icon-192.png" alt="">帳號密碼紀錄系統</h1>
-      <div class="muted">已上鎖，請輸入主密碼</div>
+    app.innerHTML = authShell(`
+      <h2>歡迎回來</h2>
+      <div class="sub">密碼庫已上鎖，請輸入主密碼解鎖。</div>
       <label class="f">主密碼</label>
-      <div class="row"><input type="password" id="pw" autocomplete="current-password" autofocus>
-        <button class="icon" id="eye" title="顯示/隱藏">👁</button></div>
+      <div class="row"><div class="input-icon">${I('key', 'sm')}<input type="password" id="pw" autocomplete="current-password" autofocus></div>
+        <button class="icon" id="eye" title="顯示/隱藏">${I('eye')}</button></div>
       <div class="err" id="err"></div>
-      <button class="primary" id="go">解鎖</button>
-      <div style="margin-top:14px;text-align:center"><a href="#" id="restore" class="muted">從備份檔還原</a></div>
-    </div></div>`;
+      <button class="primary block" id="go">${I('lock')}解鎖</button>
+      <div class="auth-alt">
+        <button id="restore" class="ghost">${I('upload')}從備份檔還原</button>
+      </div>`);
     const pw = $('#pw');
     $('#eye').onclick = () => { pw.type = pw.type === 'password' ? 'text' : 'password'; pw.focus(); };
     const go = async () => {
@@ -405,15 +466,19 @@
       <nav class="side" id="side"></nav>
       <section class="list">
         <div class="top">
-          <button class="icon menu-btn" data-act="menu" title="選單">☰</button>
-          <input type="search" id="q" placeholder="搜尋（Ctrl+F）" value="${esc(S.v.q)}" autocomplete="off">
-          <button class="icon primary" data-act="new" title="新增（Ctrl+N）">＋</button>
+          <button class="icon ghost menu-btn" data-act="menu" title="選單">${I('menu')}</button>
+          <div class="input-icon">${I('search', 'sm')}<input type="search" id="q" placeholder="搜尋名稱、帳號、網址…" value="${esc(S.v.q)}" autocomplete="off"></div>
+          <button class="primary" data-act="new" title="新增（Ctrl+N）">${I('plus')}<span>新增</span></button>
         </div>
+        <div class="bar"><span id="lcount"></span>
+          <select id="sort" title="排序"><option value="name">依名稱</option><option value="recent">最近修改</option></select></div>
         <div class="items" id="items"></div>
       </section>
       <section class="detail" id="detail"></section>
     </div>`;
     $('#q').oninput = e => { S.v.q = e.target.value; renderList(); };
+    $('#sort').value = S.v.sort;
+    $('#sort').onchange = e => { S.v.sort = e.target.value; renderList(); };
     renderAll();
   }
   function renderAll() { const st = stats(); renderSide(st); renderList(st); renderDetail(st); layoutClass(); }
@@ -424,92 +489,134 @@
   }
   function renderSide(st) {
     const f = S.v.filter, n = S.data.entries.length;
-    const a = (key, label, cnt, cls) => `<a data-f="${esc(key)}" class="${f === key ? 'on' : ''} ${cls || ''}"><span>${label}</span><span class="n">${cnt}</span></a>`;
+    const a = (key, icon, label, cnt, cls) => `<a data-f="${esc(key)}" class="${f === key ? 'on' : ''} ${cls || ''}">${I(icon)}<span class="lbl">${label}</span><span class="n">${cnt}</span></a>`;
     const cats = Object.keys(st.cats).sort((x, y) => x.localeCompare(y, 'zh-Hant'));
     const tags = Object.keys(st.tags).sort((x, y) => x.localeCompare(y, 'zh-Hant'));
-    $('#side').innerHTML = `<div class="brand"><img src="icons/icon-192.png" alt="">帳號密碼紀錄</div>
-      ${a('all', '📋 全部', n)}${a('fav', '⭐ 最愛', st.fav)}
-      <h4>分類</h4>${cats.map(c => a('cat:' + c, '📁 ' + esc(c), st.cats[c])).join('')}${a('nocat', '📂 未分類', st.nocat)}
-      ${tags.length ? '<h4>標籤</h4>' + tags.map(t => a('tag:' + t, '# ' + esc(t), st.tags[t])).join('') : ''}
-      <h4>安全檢查</h4>${a('weak', '⚠ 弱密碼', st.weak, st.weak ? 'bad' : '')}${a('reused', '♻ 重複使用', st.reused, st.reused ? 'bad' : '')}
-      <div class="grow"></div>
+    $('#side').innerHTML = `<div class="logo"><img src="icons/icon-192.png" alt=""><span>帳號密碼紀錄</span><span class="pro">PRO</span></div>
+      <div class="nav">${a('all', 'all', '所有項目', n)}${a('fav', 'star', '我的最愛', st.fav)}
+      <h4>分類</h4>${cats.map(c => a('cat:' + c, 'folder', esc(c), st.cats[c])).join('')}${a('nocat', 'inbox', '未分類', st.nocat)}
+      ${tags.length ? '<h4>標籤</h4>' + tags.map(t => a('tag:' + t, 'hash', esc(t), st.tags[t])).join('') : ''}
+      <h4>安全中心</h4>${a('weak', 'alert', '弱密碼', st.weak, st.weak ? 'bad' : '')}${a('reused', 'repeat', '重複使用', st.reused, st.reused ? 'bad' : '')}</div>
       ${syncHtml()}
       <div class="tools">
-        <button data-act="gen">🎲 密碼產生器</button>
-        <button data-act="settings">⚙ 設定 / 備份</button>
-        <button data-act="lock">🔒 上鎖（Ctrl+L）</button>
+        <a data-act="gen">${I('dice')}<span class="lbl">密碼產生器</span></a>
+        <a data-act="settings">${I('sliders')}<span class="lbl">設定與備份</span></a>
+        <a data-act="lock">${I('lock')}<span class="lbl">立即上鎖</span><kbd>Ctrl L</kbd></a>
       </div>`;
   }
   function renderList(st) {
     st = st || stats();
     const es = filtered(st), box = $('#items');
     if (!box) return;
+    const lc = $('#lcount'); if (lc) lc.innerHTML = `<b>${es.length}</b> 個項目`;
     if (!es.length) {
-      box.innerHTML = `<div class="empty">${S.data.entries.length ? '沒有符合的項目' : '還沒有任何帳號<br><br><button class="primary" data-act="new">＋ 新增第一筆</button><br><br>或到「設定 / 備份」匯入瀏覽器匯出的 CSV'}</div>`;
+      box.innerHTML = `<div class="empty"><div class="ei">${I(S.data.entries.length ? 'search' : 'key', 'lg')}</div>${S.data.entries.length ? '沒有符合的項目' : `<b style="color:var(--text)">還沒有任何帳號</b><br>
+        <button class="primary" data-act="new" style="margin:14px 0">${I('plus')}新增第一筆</button><br>
+        <span style="font-size:12.5px">或到「設定與備份」匯入瀏覽器匯出的 CSV</span>`}</div>`;
       return;
     }
-    box.innerHTML = es.map(e => `<div class="item ${S.v.sel === e.id ? 'on' : ''}" data-id="${e.id}">
-      ${avatar(e)}<div class="meta"><div class="t">${e.fav ? '<span class="star">★</span> ' : ''}${esc(e.title)}</div>
-      <div class="s">${esc(e.username || PV.hostOf(e.url) || e.category || '')}</div></div></div>`).join('');
+    box.innerHTML = es.map(e => {
+      const weak = e.password && PV.strength(e.password).score <= 1;
+      return `<div class="item ${S.v.sel === e.id ? 'on' : ''}" data-id="${e.id}">
+      ${avatar(e)}<div class="meta"><div class="t">${esc(e.title)}</div>
+      <div class="s">${esc(e.username || PV.hostOf(e.url) || e.category || '')}</div></div>
+      ${weak ? '<span class="flag" title="弱密碼"></span>' : ''}${e.fav ? `<span class="star">${I('star', 'sm')}</span>` : ''}</div>`;
+    }).join('');
   }
   function cur() { return S.data.entries.find(e => e.id === S.v.sel); }
   function renderDetail(st) {
     const d = $('#detail'); if (!d) return;
     if (S.v.edit) return renderEdit(d);
     const e = cur();
-    if (!e) {
-      st = st || stats();
-      d.innerHTML = `<div class="empty" style="margin-top:12vh">
-        <img src="icons/icon-192.png" alt="" style="width:72px;opacity:.85"><h2 style="color:var(--text)">共 ${S.data.entries.length} 筆帳號</h2>
-        ${st.weak || st.reused ? `<p>⚠ ${st.weak} 筆弱密碼、${st.reused} 筆重複使用的密碼，可在左側「安全檢查」查看</p>` : '<p>選擇左邊的項目查看內容</p>'}
-        <p class="muted" style="font-size:13px">快速鍵：Ctrl+N 新增　Ctrl+F 搜尋　Ctrl+G 產生密碼　Ctrl+L 上鎖<br>
-        閒置 ${S.data.settings.lockMin || '∞'} 分鐘自動上鎖　·　v${VERSION}${DESKTOP ? ' 桌面版' : ''}</p></div>`;
-      return;
-    }
+    if (!e) return renderOverview(d, st || stats());
     const s = PV.strength(e.password), reused = e.password && S.data.entries.filter(x => x.password === e.password).length;
-    const fld = (k, val, btns, cls, after) => `<div class="field"><div class="k">${k}</div><div class="v"><div class="val ${cls || ''}">${val}</div>${btns || ''}</div>${after || ''}</div>`;
-    d.innerHTML = `
-      <div class="head"><button class="icon back" data-act="back">←</button>${avatar(e, 'av')}<h2>${esc(e.title)}</h2>
-        <button class="icon" data-act="fav" title="最愛">${e.fav ? '★' : '☆'}</button></div>
-      ${e.username ? fld('帳號', esc(e.username), `<button class="icon" data-act="cpu" title="複製帳號">📋</button>`) : ''}
-      ${e.password ? fld('密碼', S.v.showPw ? esc(e.password) : '••••••••••',
-        `<button class="icon" data-act="eye" title="顯示/隱藏">👁</button><button class="icon" data-act="cpp" title="複製密碼">📋</button>`, 'mono',
-        `<div class="meter"><i class="bg${s.score}" style="width:${(s.score + 1) * 20}%"></i></div>
-          <div class="sl s${s.score}">強度：${s.label}${reused > 1 ? `　·　<span class="s0">♻ 有 ${reused} 筆使用相同密碼</span>` : ''}</div>`) : ''}
-      ${e.url ? fld('網址', `<a href="#" data-act="open">${esc(e.url)}</a>`, `<button class="icon" data-act="open" title="開啟">↗</button><button class="icon" data-act="cpurl" title="複製網址">📋</button>`) : ''}
-      ${e.category ? fld('分類', `<span class="chip" data-f="cat:${esc(e.category)}">📁 ${esc(e.category)}</span>`) : ''}
-      ${(e.tags || []).length ? fld('標籤', `<div class="chips">${e.tags.map(t => `<span class="chip" data-f="tag:${esc(t)}"># ${esc(t)}</span>`).join('')}</div>`) : ''}
-      ${e.notes ? fld('備註', esc(e.notes), `<button class="icon" data-act="cpn" title="複製備註">📋</button>`) : ''}
-      <div class="muted" style="font-size:12px;margin-top:8px">建立 ${fmtTime(e.createdAt)}　·　修改 ${fmtTime(e.updatedAt)}</div>
-      ${(e.history || []).length ? `<details class="hist"><summary>舊密碼紀錄（${e.history.length}）</summary>
-        ${e.history.map((h, i) => `<div class="field"><div class="k">${fmtTime(h.at)} 前使用</div><div class="v"><div class="val mono">${S.v.showPw ? esc(h.pw) : '••••••••'}</div>
-        <button class="icon" data-act="cph" data-i="${i}" title="複製">📋</button></div></div>`).join('')}</details>` : ''}
-      <div class="actions">
-        <button class="primary" data-act="edit">✏ 編輯</button>
-        <button data-act="dup">⧉ 複製成新項目</button>
-        <button class="danger" data-act="del">🗑 刪除</button>
-      </div>`;
+    const op = (act, icon, title) => `<button class="icon ghost" data-act="${act}" title="${title}">${I(icon)}</button>`;
+    const fr = (icon, k, val, ops, cls) => `<div class="fr"><div class="k">${I(icon, 'sm')}${k}</div><div class="val ${cls || ''}">${val}</div><div class="ops">${ops || ''}</div></div>`;
+    const host = PV.hostOf(e.url);
+    const login = [
+      e.username && fr('user', '帳號', esc(e.username), op('cpu', 'copy', '複製帳號')),
+      e.password && fr('key', '密碼', S.v.showPw ? esc(e.password) : '••••••••••••', op('eye', 'eye', '顯示/隱藏') + op('cpp', 'copy', '複製密碼'), 'mono'),
+      e.url && fr('link', '網址', `<a href="#" data-act="open">${esc(e.url)}</a>`, op('open', 'ext', '開啟網站') + op('cpurl', 'copy', '複製網址'))
+    ].filter(Boolean).join('');
+    const more = [
+      e.category && fr('folder', '分類', `<span class="chip" data-f="cat:${esc(e.category)}">${I('folder', 'sm')}${esc(e.category)}</span>`),
+      (e.tags || []).length && fr('hash', '標籤', `<div class="chips">${e.tags.map(t => `<span class="chip" data-f="tag:${esc(t)}">#${esc(t)}</span>`).join('')}</div>`),
+      e.notes && fr('note', '備註', esc(e.notes), op('cpn', 'copy', '複製備註'))
+    ].filter(Boolean).join('');
+    d.innerHTML = `<div class="dwrap">
+      <div class="hero">
+        <button class="icon ghost back" data-act="back" title="返回">${I('back')}</button>
+        ${avatar(e)}
+        <div class="ht"><h2>${esc(e.title)}</h2>
+          <div class="hs">${host ? `<span>${esc(host)}</span>` : ''}${e.category ? `<span>· ${esc(e.category)}</span>` : ''}${e.password ? strengthBadge(s) : ''}</div></div>
+        <div class="acts">
+          <button class="icon ${e.fav ? 'fav-on' : ''}" data-act="fav" title="${e.fav ? '取消最愛' : '加入最愛'}">${I('star')}</button>
+          <button data-act="dup" title="複製成新項目">${I('dup')}<span>複製</span></button>
+          <button class="primary" data-act="edit">${I('edit')}<span>編輯</span></button>
+        </div>
+      </div>
+      ${login ? `<div class="card"><h3>${I('key', 'sm')}登入資訊</h3>${login}
+        ${e.password ? `<div class="cb">${meter(e.password)}${reused > 1 ? `<div class="sl s0">${I('repeat', 'sm')} 有 ${reused} 個項目使用相同密碼，建議更換</div>` : ''}</div>` : ''}</div>` : ''}
+      ${more ? `<div class="card"><h3>${I('info', 'sm')}詳細資料</h3>${more}</div>` : ''}
+      ${(e.history || []).length ? `<details class="card"><summary>${I('clock', 'sm')}舊密碼紀錄（${e.history.length}）</summary>
+        ${e.history.map((h, i) => `<div class="hist-row"><span class="when">${fmtTime(h.at)} 停用</span><span class="val mono">${S.v.showPw ? esc(h.pw) : '••••••••••'}</span>
+        <button class="icon ghost" data-act="cph" data-i="${i}" title="複製">${I('copy')}</button></div>`).join('')}</details>` : ''}
+      <div class="metaline"><span>${I('plus', 'sm')}建立 ${fmtTime(e.createdAt)}</span><span>${I('edit', 'sm')}修改 ${fmtTime(e.updatedAt)}</span></div>
+      <div class="dangerzone"><button class="danger" data-act="del">${I('trash')}刪除此項目</button></div>
+    </div>`;
+  }
+  function renderOverview(d, st) {
+    const n = S.data.entries.length, risky = new Set();
+    for (const e of S.data.entries) if (e.password && (PV.strength(e.password).score <= 1 || st.pwCount[e.password] > 1)) risky.add(e.id);
+    const score = n ? Math.round(100 * (n - risky.size) / n) : 100;
+    const rc = score >= 80 ? 'var(--ok)' : score >= 50 ? 'var(--warn)' : 'var(--danger)';
+    const kpi = (f, icon, label, v, cls) => `<div class="kpi ${cls || ''}" data-f="${f}"><div class="kh">${label}<span class="ic">${I(icon, 'sm')}</span></div><div class="kv">${v}</div></div>`;
+    const c = Cloud.cfg;
+    d.innerHTML = `<div class="dwrap overview">
+      <h1>總覽</h1><div class="sub">密碼庫狀態一覽　·　閒置 ${S.data.settings.lockMin || '∞'} 分鐘自動上鎖</div>
+      <div class="kpis">
+        ${kpi('all', 'all', '帳號總數', n)}${kpi('fav', 'star', '我的最愛', st.fav, 'gold')}
+        ${kpi('weak', 'alert', '弱密碼', st.weak, st.weak ? 'bad' : '')}${kpi('reused', 'repeat', '重複使用', st.reused, st.reused ? 'bad' : '')}
+      </div>
+      <div class="card"><div class="health">
+        <div class="ring" style="--p:${score};--rc:${rc}"><div>${score}</div></div>
+        <div><h4>密碼健康分數</h4><p>${risky.size ? `有 ${risky.size} 個項目使用弱密碼或重複密碼，點上方卡片可直接查看並更換。` : n ? '所有密碼都夠強且沒有重複使用，做得很好。' : '新增帳號後會在這裡顯示密碼健康狀況。'}</p></div>
+      </div></div>
+      <div class="card"><h3>${I('cloud', 'sm')}雲端同步</h3><div class="fr"><div class="k">${I('cloud', 'sm')}狀態</div>
+        <div class="val">${c ? (S.sync.state === 'err' ? `<span class="badge bad">同步失敗</span> ${esc(S.sync.msg)}` : `<span class="badge ok">已連線</span>　版本 ${c.rev}${c.at ? '　·　' + fmtTime(c.at) : ''}`) : '<span class="badge warn">未連線</span>　資料只存在這台裝置'}</div>
+        <div class="ops"><button data-act="${c ? 'syncnow' : 'cloudset'}">${I(c ? 'refresh' : 'cloud')}${c ? '立即同步' : '連線'}</button></div></div></div>
+      <div class="card"><h3>${I('info', 'sm')}快速鍵</h3><div class="keys">
+        <span><kbd>Ctrl N</kbd> 新增</span><span><kbd>Ctrl F</kbd> 搜尋</span><span><kbd>Ctrl G</kbd> 產生密碼</span><span><kbd>Ctrl S</kbd> 儲存</span><span><kbd>Ctrl L</kbd> 上鎖</span><span><kbd>Esc</kbd> 取消</span></div></div>
+      <div class="metaline"><span>${I('shield', 'sm')}AES-256-GCM · PBKDF2 600,000</span><span>v${VERSION} PRO${DESKTOP ? ' · Windows' : ' · Web'}</span></div>
+    </div>`;
   }
 
   function renderEdit(d) {
     const e = S.v.edit, cats = Object.keys(stats().cats).sort();
-    d.innerHTML = `
-      <div class="head"><button class="icon back" data-act="cancel">←</button><h2>${e.id && S.data.entries.some(x => x.id === e.id) ? '編輯' : '新增帳號'}</h2></div>
-      <label class="f">名稱 *</label><input id="e_title" value="${esc(e.title)}" placeholder="例如：Google、公司 VPN、銀行" autocomplete="off">
-      <label class="f">帳號 / Email</label><input id="e_username" value="${esc(e.username)}" autocomplete="off">
-      <label class="f">密碼</label>
-      <div class="row"><input id="e_password" type="${S.v.showPw ? 'text' : 'password'}" class="mono" value="${esc(e.password)}" autocomplete="new-password">
-        <button class="icon" data-act="eye2" title="顯示/隱藏">👁</button>
-        <button class="icon" data-act="quickgen" title="直接產生一組">🎲</button>
-        <button class="icon" data-act="gen2" title="產生器設定">⚙</button></div>
-      <div id="e_meter">${meter(e.password)}</div>
-      <label class="f">網址</label><input id="e_url" value="${esc(e.url)}" placeholder="https://" autocomplete="off" inputmode="url">
-      <label class="f">分類</label><input id="e_category" value="${esc(e.category)}" list="catlist" placeholder="例如：工作、銀行、購物" autocomplete="off">
-      <datalist id="catlist">${cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
-      <label class="f">標籤（用逗號分隔）</label><input id="e_tags" value="${esc((e.tags || []).join(', '))}" autocomplete="off">
-      <label class="f">備註</label><textarea id="e_notes" placeholder="安全提問、PIN、備用碼…">${esc(e.notes)}</textarea>
-      <label class="check"><input type="checkbox" id="e_fav" ${e.fav ? 'checked' : ''}> ⭐ 加入最愛</label>
-      <div class="actions"><button class="primary" data-act="save">💾 儲存（Ctrl+S）</button><button data-act="cancel">取消</button></div>`;
+    const isNew = !S.data.entries.some(x => x.id === e.id);
+    d.innerHTML = `<div class="dwrap">
+      <div class="hero"><button class="icon ghost back" data-act="cancel" title="返回">${I('back')}</button>
+        <div class="ht"><h2>${isNew ? '新增帳號' : '編輯：' + esc(e.title)}</h2><div class="hs">標示 * 為必填，其餘可留白</div></div></div>
+      <div class="card"><h3>${I('key', 'sm')}登入資訊</h3><div class="cb"><div class="form-grid">
+        <div class="full"><label class="f">名稱 *</label><input id="e_title" value="${esc(e.title)}" placeholder="例如：Google、公司 VPN、銀行" autocomplete="off"></div>
+        <div><label class="f">帳號 / Email</label><input id="e_username" value="${esc(e.username)}" autocomplete="off"></div>
+        <div><label class="f">網址</label><input id="e_url" value="${esc(e.url)}" placeholder="https://" autocomplete="off" inputmode="url"></div>
+        <div class="full"><label class="f">密碼</label>
+          <div class="row"><input id="e_password" type="${S.v.showPw ? 'text' : 'password'}" class="mono" value="${esc(e.password)}" autocomplete="new-password">
+            <button class="icon" data-act="eye2" title="顯示/隱藏">${I('eye')}</button>
+            <button class="icon" data-act="quickgen" title="直接產生一組強密碼">${I('dice')}</button>
+            <button class="icon" data-act="gen2" title="產生器設定">${I('sliders')}</button></div>
+          <div id="e_meter">${meter(e.password)}</div></div>
+      </div></div></div>
+      <div class="card"><h3>${I('info', 'sm')}詳細資料</h3><div class="cb"><div class="form-grid">
+        <div><label class="f">分類</label><input id="e_category" value="${esc(e.category)}" list="catlist" placeholder="例如：工作、銀行、購物" autocomplete="off"></div>
+        <datalist id="catlist">${cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+        <div><label class="f">標籤（逗號分隔）</label><input id="e_tags" value="${esc((e.tags || []).join(', '))}" autocomplete="off"></div>
+        <div class="full"><label class="f">備註</label><textarea id="e_notes" placeholder="安全提問、PIN、備用碼…">${esc(e.notes)}</textarea></div>
+        <div class="full"><label class="check"><input type="checkbox" id="e_fav" ${e.fav ? 'checked' : ''}> 加入我的最愛</label></div>
+      </div></div></div>
+      <div class="formbar"><button data-act="cancel">取消</button><button class="primary" data-act="save">${I('check')}儲存<kbd style="background:rgba(255,255,255,.15);border-color:transparent;color:#fff">Ctrl S</kbd></button></div>
+    </div>`;
     $('#e_password').oninput = ev => { $('#e_meter').innerHTML = meter(ev.target.value); };
     setTimeout(() => { const t = $('#e_title'); if (t && !t.value) t.focus(); }, 30);
   }
@@ -541,9 +648,9 @@
   /* ---------- 密碼產生器 ---------- */
   function openGenerator(onUse) {
     const g = S.data.settings.gen;
-    openModal(`<h3>🎲 密碼產生器</h3>
+    openModal(`${dh('dice', '密碼產生器')}
       <div class="gen-out mono" id="g_out"></div><div id="g_m"></div>
-      <label class="f">長度：<b id="g_lv">${g.length}</b></label>
+      <label class="f">長度　<b id="g_lv" style="color:var(--primary)">${g.length}</b></label>
       <div class="row"><input type="range" id="g_len" min="6" max="64" value="${g.length}"><input type="number" id="g_num" min="6" max="64" value="${g.length}" style="width:80px;flex:none"></div>
       <div class="grid2" style="margin-top:8px">
         <label class="check"><input type="checkbox" id="g_upper" ${g.upper ? 'checked' : ''}> 大寫 A-Z</label>
@@ -552,7 +659,7 @@
         <label class="check"><input type="checkbox" id="g_symbols" ${g.symbols ? 'checked' : ''}> 符號 !@#$…</label>
         <label class="check"><input type="checkbox" id="g_noAmbig" ${g.noAmbig ? 'checked' : ''}> 排除易混淆 (I l 1 O 0)</label>
       </div>
-      <div class="btns"><button id="g_re">🔄 重新產生</button><button id="g_cp">📋 複製</button>
+      <div class="btns"><button id="g_re">${I('refresh')}重新產生</button><button id="g_cp">${I('copy')}複製</button>
         ${onUse ? '<button class="primary" id="g_use">使用這組密碼</button>' : '<button class="primary" id="g_close">關閉</button>'}</div>`, d => {
       let pw = '';
       const opts = () => {
@@ -584,24 +691,25 @@
     let where = '本機瀏覽器（此網站的儲存空間）';
     if (DESKTOP) { try { where = (await S.api.info()).data_dir; } catch (e) { } }
     const opt = (vals, cur, unit) => vals.map(v => `<option value="${v}" ${v === cur ? 'selected' : ''}>${v ? v + unit : '永不'}</option>`).join('');
-    openModal(`<h3>⚙ 設定 / 備份</h3>
-      <div class="grid2">
-        <div><label class="f">閒置自動上鎖</label><select id="s_lock">${opt([1, 3, 5, 10, 15, 30, 60, 0], st.lockMin, ' 分鐘')}</select></div>
-        <div><label class="f">複製後清除剪貼簿</label><select id="s_clip">${opt([10, 20, 30, 60, 120, 0], st.clipSec, ' 秒')}</select></div>
-      </div>
-      <section><h4>☁ Google 雲端同步</h4>
-        <div class="muted" style="font-size:13px;margin-bottom:6px">存在你自己的 Google 試算表；上傳的只有加密後的密文，Google 看不到內容。電腦和手機連同一個雲端就會自動同步。</div>
-        ${Cloud.cfg ? `<div style="font-size:13px;margin-bottom:6px">已連線（版本 ${Cloud.cfg.rev}${Cloud.cfg.at ? '，上次同步 ' + fmtTime(Cloud.cfg.at) : ''}）</div>
-          <div class="row" style="flex-wrap:wrap"><button id="s_sync">🔄 立即同步</button><button id="s_unlink" class="danger">中斷連線</button></div>`
-        : '<button id="s_link" class="primary">連線 Google 雲端</button>'}</section>
-      <section><h4>🔑 主密碼</h4><button id="s_chpw">變更主密碼</button></section>
-      <section><h4>💾 加密備份（建議定期做）</h4>
-        <div class="muted" style="font-size:13px;margin-bottom:6px">備份檔（.pwvault）用目前的主密碼加密，可在電腦版和手機版之間互相匯入。</div>
-        <div class="row" style="flex-wrap:wrap"><button id="s_exp">⬇ 匯出加密備份</button><button id="s_imp">⬆ 匯入備份 / CSV（合併）</button></div></section>
-      <section><h4>📄 CSV（Chrome / Edge / Firefox / Bitwarden）</h4>
-        <div class="muted" style="font-size:13px;margin-bottom:6px">從瀏覽器「密碼管理員 → 匯出密碼」得到的 CSV，可用上面的「匯入」讀進來；匯入完請刪掉那個 CSV 檔。</div>
-        <button id="s_csv" class="danger">⬇ 匯出 CSV（未加密明文）</button></section>
-      <section><h4>ℹ 資料位置</h4><div class="muted" style="font-size:13px;overflow-wrap:anywhere">${esc(where)}${DESKTOP ? '<br>每天自動在 backups 資料夾保留一份加密備份（最多 30 份）' : '<br>清除瀏覽器網站資料會一併刪除，請定期匯出備份'}</div></section>
+    openModal(`${dh('sliders', '設定與備份')}
+      <section><h4>${I('lock', 'sm')}安全性</h4>
+        <div class="grid2">
+          <div><label class="f">閒置自動上鎖</label><select id="s_lock">${opt([1, 3, 5, 10, 15, 30, 60, 0], st.lockMin, ' 分鐘')}</select></div>
+          <div><label class="f">複製後清除剪貼簿</label><select id="s_clip">${opt([10, 20, 30, 60, 120, 0], st.clipSec, ' 秒')}</select></div>
+        </div>
+        <div style="margin-top:12px"><button id="s_chpw">${I('key')}變更主密碼</button></div></section>
+      <section><h4>${I('cloud', 'sm')}Google 雲端同步 ${Cloud.cfg ? '<span class="badge ok">已連線</span>' : '<span class="badge warn">未連線</span>'}</h4>
+        <div class="desc">存在你自己的 Google 試算表，上傳的只有加密後的密文，Google 看不到內容。</div>
+        ${Cloud.cfg ? `<div class="desc" style="color:var(--text-2)">版本 ${Cloud.cfg.rev}${Cloud.cfg.at ? '　·　上次同步 ' + fmtTime(Cloud.cfg.at) : ''}</div>
+          <div class="row" style="flex-wrap:wrap"><button id="s_sync">${I('refresh')}立即同步</button><button id="s_unlink" class="danger">中斷連線</button></div>`
+        : `<button id="s_link" class="primary">${I('cloud')}連線 Google 雲端</button>`}</section>
+      <section><h4>${I('shield', 'sm')}加密備份</h4>
+        <div class="desc">備份檔（.pwvault）以目前的主密碼加密，可在電腦與手機之間互相匯入。</div>
+        <div class="row" style="flex-wrap:wrap"><button id="s_exp">${I('download')}匯出加密備份</button><button id="s_imp">${I('upload')}匯入備份 / CSV</button></div></section>
+      <section><h4>${I('file', 'sm')}CSV 匯出</h4>
+        <div class="desc">支援 Chrome、Edge、Firefox、Bitwarden 格式。CSV 為未加密明文，用完請立即刪除。</div>
+        <button id="s_csv" class="danger">${I('download')}匯出 CSV（明文）</button></section>
+      <section><h4>${I('info', 'sm')}資料位置</h4><div class="desc" style="overflow-wrap:anywhere;margin:0">${esc(where)}${DESKTOP ? '<br>每天自動在 backups 資料夾保留一份加密備份（最多 30 份）' : '<br>清除瀏覽器網站資料會一併刪除，請定期匯出備份'}</div></section>
       <div class="btns"><button class="primary" id="s_ok">完成</button></div>`, d => {
       const saveOpts = () => { st.lockMin = +$('#s_lock', d).value; st.clipSec = +$('#s_clip', d).value; };
       $('#s_ok', d).onclick = async () => { saveOpts(); closeModal(); await persist(); renderDetail(); toast('設定已儲存'); };
@@ -620,7 +728,7 @@
   // download=true：還沒有本機密碼庫，直接從雲端下載（新手機 / 新電腦）
   function cloudDialog(download) {
     const preset = (window.PV_CLOUD_URL || '').trim();
-    openModal(`<h3>☁ ${download ? '從 Google 雲端下載' : '連線 Google 雲端'}</h3>
+    openModal(`${dh('cloud', download ? '從 Google 雲端下載' : '連線 Google 雲端')}
       <div class="muted" style="font-size:13px">${download
         ? '輸入雲端網址和同步密碼，下載後再用主密碼解鎖。'
         : '第一次連線時輸入的同步密碼會成為這個雲端的同步密碼，其他裝置要輸入同一組。<br>同步密碼只用來存取雲端，主密碼仍然只有你知道。'}</div>
@@ -628,8 +736,8 @@
       <input id="c_url" value="${esc(preset)}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" inputmode="url">
       <label class="f">同步密碼</label><input id="c_key" type="password" autocomplete="off" ${preset ? 'autofocus' : ''}>
       <div id="c_err" style="color:var(--danger);min-height:1.4em;margin-top:6px"></div>
-      <button id="c_first" class="primary hidden" style="width:100%">這是第一台：建立新密碼庫並連上這個雲端</button>
-      <div class="btns"><button id="c_no">取消</button><button class="primary" id="c_ok">${download ? '下載' : '連線並同步'}</button></div>`, d => {
+      <button id="c_first" class="primary hidden" style="width:100%">${I('plus')}這是第一台：建立新密碼庫並連上這個雲端</button>
+      <div class="btns"><button id="c_no">取消</button><button class="primary" id="c_ok">${I(download ? 'download' : 'cloud')}${download ? '下載' : '連線並同步'}</button></div>`, d => {
       $('#c_no', d).onclick = closeModal;
       const go = async () => {
         const err = m => { $('#c_err', d).textContent = m; };
@@ -660,7 +768,7 @@
               if ((key || '').length < 6) return err('同步密碼至少 6 個字');
               S.pendingCloud = { url, key };
               closeModal();
-              const m = $('#err'); if (m) { m.style.color = 'var(--accent)'; m.textContent = '設定主密碼並按「建立」，完成後會自動連上 Google 雲端。'; }
+              const m = $('#err'); if (m) { m.style.color = 'var(--primary)'; m.textContent = '設定主密碼並按「建立」，完成後會自動連上 Google 雲端。'; }
               const p = $('#p1'); if (p) p.focus();
             };
           } else err(e.message);
@@ -671,7 +779,7 @@
     });
   }
   function changeMaster() {
-    openModal(`<h3>🔑 變更主密碼</h3>
+    openModal(`${dh('key', '變更主密碼')}
       <label class="f">目前主密碼</label><input type="password" id="c0" autocomplete="current-password" autofocus>
       <label class="f">新主密碼</label><input type="password" id="c1" autocomplete="new-password"><div id="cm">${meter('')}</div>
       <label class="f">再輸入一次</label><input type="password" id="c2" autocomplete="new-password">
@@ -762,8 +870,8 @@
       r = await mergeEntries(list, false);
     }
     S.v.filter = 'all'; renderAll();
-    openModal(`<h3>匯入完成</h3><p>新增 <b>${r.added}</b> 筆${r.updated ? `、更新 ${r.updated} 筆` : ''}、略過重複 ${r.skipped} 筆。</p>
-      ${/\.csv$/i.test(name || '') ? '<p class="s1">⚠ 請記得刪除剛才的 CSV 檔（它沒有加密）。</p>' : ''}
+    openModal(`${dh('check', '匯入完成')}<p>新增 <b>${r.added}</b> 筆${r.updated ? `、更新 ${r.updated} 筆` : ''}、略過重複 ${r.skipped} 筆。</p>
+      ${/\.csv$/i.test(name || '') ? `<div class="notice">${I('alert', 'sm')}<span>請記得刪除剛才的 CSV 檔（它沒有加密）。</span></div>` : ''}
       <div class="btns"><button class="primary" id="ok" autofocus>好</button></div>`, d => { $('#ok', d).onclick = closeModal; });
     return r;
   }
