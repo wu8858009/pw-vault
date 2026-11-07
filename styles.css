@@ -310,6 +310,14 @@ svg.i.flip { transform: rotate(180deg); }
 .ptype { font-size: 11.5px; color: var(--muted); }
 .palette .pfoot { display: flex; gap: 14px; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--line-2); background: var(--subtle); font-size: 12px; color: var(--muted); }
 
+/* 網站圖示：疊在字母頭像上，載入失敗會被移除 */
+.av { position: relative; overflow: hidden; }
+.av img.fav { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 6px; background: #fff; }
+/* 切到背景時模糊（App 切換畫面不露出內容） */
+body.privacy #app, body.privacy #modal { filter: blur(18px); }
+.qrbox { background: #fff; border-radius: 12px; padding: 12px; width: min(320px, 100%); margin: 0 auto; }
+.qrbox svg { width: 100%; height: auto; display: block; }
+
 /* 平板 */
 @media (max-width: 1100px) {
   .shell { grid-template-columns: 210px minmax(250px, 320px) 1fr; }

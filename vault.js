@@ -222,15 +222,18 @@
     }).join(',')).join('\r\n') + '\r\n';
   }
 
+  // 欄位別名：Chrome / Edge / Firefox / Safari·Apple 密碼 / 1Password / LastPass / Bitwarden / KeePass / KeePassXC / 本系統
   const COLS = {
-    title: ['name', 'title', '名稱', '標題', '項目'],
-    url: ['url', 'login_uri', 'website', 'web site', '網址', '網站'],
-    username: ['username', 'login_username', 'user', 'user name', 'email', 'login', '帳號', '使用者名稱'],
+    title: ['name', 'title', 'account', '名稱', '標題', '項目'],
+    url: ['url', 'login_uri', 'website', 'web site', 'urls', 'login url', '網址', '網站'],
+    username: ['username', 'login_username', 'user', 'user name', 'login name', 'email', 'login', '帳號', '使用者名稱'],
     password: ['password', 'login_password', '密碼'],
     notes: ['note', 'notes', 'extra', 'comments', 'comment', '備註'],
     category: ['folder', 'grouping', 'category', 'group', '分類', '資料夾'],
     tags: ['tags', 'tag', '標籤'],
-    fav: ['favorite', 'fav', '最愛']
+    fav: ['favorite', 'fav', '最愛'],
+    type: ['type'],
+    totp: ['totp', 'otpauth', 'login_totp', 'one-time password']
   };
   function hostOf(url) {
     try { return new URL(/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : 'https://' + url).hostname.replace(/^www\./, ''); }
@@ -251,10 +254,80 @@
         url, username: get(r, 'username'), password: idx.password >= 0 ? (r[idx.password] || '') : '',
         notes: get(r, 'notes'), category: get(r, 'category'),
         tags: get(r, 'tags').split(/[,，;；]/).map(s => s.trim()).filter(Boolean),
-        fav: /^(1|true|yes|是)$/i.test(get(r, 'fav'))
+        fav: /^(1|true|yes|是)$/i.test(get(r, 'fav')), fields: []
       };
+      // Bitwarden CSV 的安全筆記；LastPass 的安全筆記網址固定是 http://sn
+      if (/^(note|securenote)$/i.test(get(r, 'type')) || url === 'http://sn') { e.type = 'note'; e.url = ''; }
+      if (get(r, 'totp')) e.fields.push({ n: '雙重驗證 (TOTP)', v: get(r, 'totp'), s: true });
       return e;
-    }).filter(e => e.username || e.password || e.url);
+    }).filter(e => e.username || e.password || e.url || e.type === 'note');
+  }
+
+  // Bitwarden 未加密 JSON 匯出：登入／安全筆記／信用卡／身分都對應到本系統類型
+  function bitwardenToEntries(j) {
+    const folders = {};
+    for (const f of j.folders || []) folders[f.id] = f.name;
+    return (j.items || []).map(it => {
+      const e = { title: it.name || '(未命名)', notes: it.notes || '', fav: !!it.favorite, category: folders[it.folderId] || '',
+        tags: [], data: {}, fields: (it.fields || []).map(f => ({ n: f.name || '', v: f.value == null ? '' : String(f.value), s: f.type === 1 })) };
+      if (it.type === 1 && it.login) {
+        e.type = 'login'; e.username = it.login.username || ''; e.password = it.login.password || '';
+        e.url = ((it.login.uris || [])[0] || {}).uri || '';
+        if (it.login.totp) e.fields.push({ n: '雙重驗證 (TOTP)', v: it.login.totp, s: true });
+      } else if (it.type === 3 && it.card) {
+        const c = it.card;
+        e.type = 'card'; e.data = { holder: c.cardholderName || '', number: c.number || '', cvv: c.code || '', bank: c.brand || '',
+          exp: c.expMonth ? String(c.expMonth).padStart(2, '0') + '/' + String(c.expYear || '').slice(-2) : '' };
+      } else if (it.type === 4 && it.identity) {
+        const d = it.identity;
+        e.type = 'identity'; e.data = { fullname: [d.lastName, d.middleName, d.firstName].filter(Boolean).join(' ') || d.username || '',
+          doctype: d.passportNumber ? '護照' : d.licenseNumber ? '駕照' : d.ssn ? '身分證' : '', docno: d.passportNumber || d.licenseNumber || d.ssn || '',
+          phone: d.phone || '', address: [d.address1, d.address2, d.city, d.state, d.postalCode, d.country].filter(Boolean).join(' ') };
+      } else e.type = 'note';
+      return e;
+    });
+  }
+
+  // KeePass 2.x / KeePassXC 的 XML 匯出：群組路徑當分類，自訂字串當自訂欄位
+  function keepassXmlToEntries(xmlText) {
+    if (typeof DOMParser === 'undefined') throw new Error('此環境不支援 XML');
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('XML 格式錯誤');
+    const root = doc.querySelector('KeePassFile > Root');
+    if (!root) throw new Error('不是 KeePass 的 XML 匯出檔');
+    const out = [];
+    const kids = (el, tag) => [...el.children].filter(c => c.tagName === tag);
+    const walk = (g, path) => {
+      const name = (kids(g, 'Name')[0] || {}).textContent || '';
+      if (/^(Recycle Bin|資源回收筒|回收站)$/i.test(name)) return;
+      const p = path.concat(name).filter(Boolean);
+      for (const en of kids(g, 'Entry')) {
+        const s = {};
+        for (const st of kids(en, 'String')) s[(kids(st, 'Key')[0] || {}).textContent] = (kids(st, 'Value')[0] || {}).textContent || '';
+        const std = ['Title', 'UserName', 'Password', 'URL', 'Notes'];
+        const e = { title: s.Title || hostOf(s.URL || '') || '(未命名)', username: s.UserName || '', password: s.Password || '', url: s.URL || '',
+          notes: s.Notes || '', category: p.slice(1).join(' / '), tags: ((kids(en, 'Tags')[0] || {}).textContent || '').split(/[,;]/).map(x => x.trim()).filter(Boolean),
+          fields: Object.keys(s).filter(k => !std.includes(k) && s[k]).map(k => ({ n: k === 'otp' ? '雙重驗證 (TOTP)' : k, v: s[k], s: true })) };
+        if (!e.username && !e.password && !e.url) e.type = 'note';
+        out.push(e);
+      }
+      for (const sub of kids(g, 'Group')) walk(sub, p);
+    };
+    for (const g of kids(root, 'Group')) walk(g, []);
+    return out;
+  }
+
+  // 依檔案內容自動判斷格式
+  function importAny(text) {
+    const t = text.replace(/^﻿/, '').trimStart();
+    if (t.startsWith('<')) return { fmt: 'KeePass XML', entries: keepassXmlToEntries(t) };
+    if (t.startsWith('{')) {
+      const j = JSON.parse(t);
+      if (j.encrypted) throw new Error('這是加密的 Bitwarden 匯出檔，請改匯出「.json（未加密）」');
+      if (Array.isArray(j.items)) return { fmt: 'Bitwarden JSON', entries: bitwardenToEntries(j) };
+      throw new Error('不認得這個 JSON 格式');
+    }
+    return { fmt: 'CSV', entries: rowsToEntries(parseCSV(text)) };
   }
   function entriesToRows(entries) {
     return [['name', 'url', 'username', 'password', 'note', 'category', 'tags', 'favorite']].concat(
@@ -264,7 +337,7 @@
   function uid() { return Date.now().toString(36) + b64(rand(6)).replace(/[+/=]/g, ''); }
 
   const api = { ITER, seal, open, openWith, merge, sameEntries, newSession, newDek, encBytes, decBytes, hashHex, rawKey, encText, decText, rand, parseFile, isVaultText, generate, strength, parseCSV, toCSV,
-    rowsToEntries, entriesToRows, hostOf, uid, b64, unb64 };
+    rowsToEntries, entriesToRows, bitwardenToEntries, keepassXmlToEntries, importAny, hostOf, uid, b64, unb64 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PV = api;
 })(typeof window !== 'undefined' ? window : globalThis);
