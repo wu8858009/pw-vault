@@ -108,7 +108,8 @@ label.f { display: block; margin: 14px 0 6px; font-size: 12.5px; font-weight: 60
 .notice svg { margin-top: 2px; }
 
 /* ===== 主畫面 ===== */
-.shell { display: grid; grid-template-columns: 236px minmax(280px, 380px) 1fr; height: 100vh; height: 100dvh; }
+.shell { display: grid; grid-template-columns: 236px clamp(280px, 24vw, 420px) 1fr; height: 100vh; height: 100dvh; }
+@media (min-width: 1800px) { .shell { grid-template-columns: 260px clamp(320px, 22vw, 460px) 1fr; } body { font-size: 15px; } }
 .side { background: var(--side); color: var(--side-text); overflow: hidden; padding: 16px 12px 12px; display: flex; flex-direction: column; border-right: 1px solid var(--side-line); min-height: 0; }
 .side .logo { padding: 2px 8px 14px; color: #fff; font-size: 14.5px; gap: 10px; white-space: nowrap; }
 .side .nav { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -12px; padding: 0 12px 12px; scrollbar-width: thin; scrollbar-color: var(--side-line) transparent; }
@@ -158,7 +159,10 @@ label.f { display: block; margin: 14px 0 6px; font-size: 12.5px; font-weight: 60
 .empty .ei { width: 52px; height: 52px; margin: 0 auto 12px; border-radius: 14px; display: grid; place-items: center; background: var(--primary-soft); color: var(--primary); }
 
 .detail { overflow-y: auto; min-width: 0; background: var(--bg); }
-.dwrap { max-width: 860px; margin: 0 auto; padding: 22px 28px 48px; }
+.dwrap { padding: 22px 28px 48px; }
+/* 內容卡片：寬螢幕自動分兩欄（像報紙一樣由上往下排），窄螢幕單欄 */
+.dcols { columns: 2 400px; column-gap: 14px; margin-top: 14px; }
+.dcols > .card { break-inside: avoid; margin: 0 0 14px; display: block; width: 100%; }
 .hero { display: flex; gap: 16px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 18px 20px; box-shadow: var(--sh-1); }
 .hero .av { width: 54px; height: 54px; border-radius: 13px; font-size: 22px; }
 .hero .ht { flex: 1; min-width: 0; }
