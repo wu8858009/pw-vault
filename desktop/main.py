@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import threading
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -26,7 +27,9 @@ WEB = BASE / "web"
 DATA_DIR = Path(os.environ.get("PWVAULT_DATA") or Path(os.environ.get("APPDATA", Path.home())) / "PasswordVault")
 VAULT = DATA_DIR / "vault.json"
 BACKUPS = DATA_DIR / "backups"
+CLOUD = DATA_DIR / "cloud.json"
 SELFTEST = os.environ.get("PWVAULT_SELFTEST")
+CLOUDTEST = os.environ.get("PWVAULT_CLOUDTEST")  # 自我測試用的模擬雲端網址
 KEEP_BACKUPS = 30
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -158,7 +161,7 @@ def looks_like_vault(text: str) -> bool:
 
 class Api:
     def __init__(self):
-        self.window = None
+        self._window = None
 
     def load_vault(self):
         try:
@@ -181,8 +184,23 @@ class Api:
         except Exception as e:
             return str(e)
 
+    def get_cloud(self):
+        try:
+            return CLOUD.read_text(encoding="utf-8") if CLOUD.exists() else None
+        except Exception:
+            return None
+
+    def set_cloud(self, text):
+        # 雲端網址 + 同步密碼（只保護雲端上的密文；主密碼不會存）
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if text:
+            write_atomic(CLOUD, text)
+        else:
+            CLOUD.unlink(missing_ok=True)
+        return True
+
     def save_file(self, name, text):
-        r = self.window.create_file_dialog(webview.SAVE_DIALOG, directory=str(Path.home() / "Documents"), save_filename=name)
+        r = self._window.create_file_dialog(webview.SAVE_DIALOG, directory=str(Path.home() / "Documents"), save_filename=name)
         if not r:
             return None
         path = r if isinstance(r, str) else r[0]
@@ -205,7 +223,7 @@ class Api:
 
     def selftest_done(self, result):
         Path(SELFTEST).write_text(result, encoding="utf-8")
-        threading.Timer(0.3, self.window.destroy).start()
+        threading.Timer(0.3, self._window.destroy).start()
 
 
 # ---------------- 本機網頁伺服器（只提供 web/ 靜態檔） ----------------
@@ -250,10 +268,11 @@ def main():
         pass
     port = serve()
     api = Api()
-    url = f"http://127.0.0.1:{port}/index.html?desktop=1" + ("&selftest=1" if SELFTEST else "")
+    url = f"http://127.0.0.1:{port}/index.html?desktop=1" + ("&selftest=1" if SELFTEST else "") \
+        + (f"&cloud={urllib.parse.quote(CLOUDTEST, safe='')}" if SELFTEST and CLOUDTEST else "")
     win = webview.create_window(APP_NAME, url, js_api=api, width=1180, height=760, min_size=(720, 520),
                                 background_color="#12161d")
-    api.window = win
+    api._window = win
 
     def on_closing():
         CLIP.clear_if_mine()

@@ -34,9 +34,140 @@
       localStorage.setItem(LS_KEY, text);
     }
   };
-  async function persist() {
-    try { await Store.save(await PV.seal(S.session, S.data)); }
+  async function persistLocal() {
+    try { const t = await PV.seal(S.session, S.data); await Store.save(t); S.lastSealed = t; }
     catch (e) { toast('⚠ 儲存失敗：' + e.message, 6000); throw e; }
+  }
+  async function persist() {
+    await persistLocal();
+    if (Cloud.cfg) { Cloud.cfg.dirty = true; await Cloud.save(); scheduleSync(800); }
+  }
+
+  /* ---------- Google 雲端同步（只傳密文） ---------- */
+  const CLOUD_KEY = 'pwvault.cloud';
+  let memCloud = null;
+  const Cloud = {
+    cfg: null,
+    async load() {
+      let t = null;
+      if (SELFTEST && !DESKTOP) t = memCloud;
+      else if (DESKTOP) t = await S.api.get_cloud();
+      else { try { t = localStorage.getItem(CLOUD_KEY); } catch (e) { } }
+      try { this.cfg = t ? JSON.parse(t) : null; } catch (e) { this.cfg = null; }
+      return this.cfg;
+    },
+    async save() {
+      const t = this.cfg ? JSON.stringify(this.cfg) : '';
+      if (SELFTEST && !DESKTOP) memCloud = t;
+      else if (DESKTOP) await S.api.set_cloud(t);
+      else if (t) localStorage.setItem(CLOUD_KEY, t); else localStorage.removeItem(CLOUD_KEY);
+    }
+  };
+  function okCloudUrl(u) {
+    return /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u) || /^http:\/\/(127\.0\.0\.1|localhost):\d+\/[\w/-]*$/.test(u);
+  }
+  async function cloudCall(body, cfg) {
+    cfg = cfg || Cloud.cfg;
+    let r;
+    try {
+      r = await fetch(cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ key: cfg.key }, body)), cache: 'no-store', redirect: 'follow' });
+    } catch (e) { throw new Error('連不上 Google（網路中斷？）'); }
+    if (!r.ok) throw new Error('雲端錯誤 HTTP ' + r.status);
+    let j;
+    try { j = await r.json(); } catch (e) { throw new Error('雲端回應格式不對（網址錯誤或尚未授權部署）'); }
+    if (!j.ok && j.err !== 'CONFLICT') {
+      throw new Error({ BAD_KEY: '同步密碼錯誤', NOT_SETUP: '雲端還沒設定同步密碼', NOT_VAULT: '資料格式錯誤' }[j.err] || j.err);
+    }
+    return j;
+  }
+  S.sync = { state: 'off', msg: '' };
+  function setSync(state, msg) {
+    S.sync = { state, msg: msg || '' };
+    const el = $('#syncst'); if (el) el.outerHTML = syncHtml();
+  }
+  function syncHtml() {
+    const c = Cloud.cfg, s = S.sync;
+    if (!c) return '<a id="syncst" data-act="cloudset" class="sync"><span>☁ 未連線 Google</span></a>';
+    const t = c.at ? fmtTime(c.at).slice(11) : '';
+    const txt = s.state === 'busy' ? '☁ 同步中…' : s.state === 'err' ? '⚠ 同步失敗' : c.dirty ? '☁ 等待上傳' : `☁ 已同步 ${t}`;
+    return `<a id="syncst" data-act="syncnow" class="sync ${s.state === 'err' ? 'bad' : ''}" title="${esc(s.msg || '點一下立即同步')}"><span>${txt}</span></a>`;
+  }
+  let syncBusy = false, syncAgain = false, syncTimer = 0;
+  function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
+  // 把雲端版本併進來；回傳 true = 本機有雲端沒有的變更（需要上傳），null = 取消
+  async function absorb(text) {
+    let remote = await PV.openWith(text, S.session);
+    if (!remote) {
+      const pw = await promptPw('輸入雲端的主密碼', '雲端資料是用另一個主密碼加密的（可能在別台裝置改過主密碼）。輸入後本機也會改用這個主密碼。');
+      if (pw == null) return null;
+      try { const o = await PV.open(text, pw); remote = o.data; S.session = o.session; toast('已改用雲端的主密碼', 4000); }
+      catch (e) { toast('雲端主密碼錯誤', 4000); return null; }
+    }
+    remote = defaults(remote);
+    const merged = defaults(PV.merge(S.data, remote));
+    const needPush = !PV.sameEntries(merged, remote);
+    const localChanged = !PV.sameEntries(merged, S.data);
+    S.data = merged;
+    await persistLocal();
+    if (localChanged && $('#shell')) {
+      if (S.v.edit) readEdit();
+      if (S.v.sel && !cur()) S.v.sel = null;
+      renderAll();
+    }
+    return needPush;
+  }
+  async function syncNow() {
+    const c = Cloud.cfg;
+    if (!c || !S.session) return;
+    if (syncBusy) { syncAgain = true; return; }
+    clearTimeout(syncTimer);
+    syncBusy = true; setSync('busy');
+    try {
+      for (let i = 0; i < 4; i++) {
+        const r = await cloudCall({ a: 'rev' }, c);
+        if (r.rev !== c.rev) {
+          const l = await cloudCall({ a: 'load' }, c);
+          if (l.vault) {
+            const need = await absorb(l.vault);
+            if (need === null) { setSync('err', '需要雲端的主密碼'); return; }
+            if (need) c.dirty = true;
+          }
+          c.rev = l.rev; await Cloud.save();
+        }
+        if (!c.dirty || !S.session) break;
+        const s = await cloudCall({ a: 'save', baseRev: c.rev, vault: await PV.seal(S.session, S.data) }, c);
+        if (s.ok) { c.rev = s.rev; c.dirty = false; await Cloud.save(); break; }
+        // CONFLICT：別台剛上傳過，重新下載合併再傳
+      }
+      c.at = Date.now(); await Cloud.save();
+      setSync('ok');
+    } catch (e) { setSync('err', e.message); }
+    finally {
+      syncBusy = false;
+      if (syncAgain) { syncAgain = false; scheduleSync(300); }
+    }
+  }
+  // 上鎖時還沒傳上去的變更：直接送最後一次存檔的密文（衝突就留到下次解鎖再合併）
+  function flushOnLock() {
+    const c = Cloud.cfg, t = S.lastSealed;
+    if (!c || !c.dirty || !t || syncBusy) return;
+    cloudCall({ a: 'save', baseRev: c.rev, vault: t }, c).then(async s => {
+      if (s.ok) { c.rev = s.rev; c.dirty = false; c.at = Date.now(); await Cloud.save(); }
+    }).catch(() => {});
+  }
+  async function connectCloud(url, key) {
+    url = (url || '').trim();
+    if (!okCloudUrl(url)) throw new Error('網址格式不對，應該是 https://script.google.com/macros/s/…/exec');
+    if ((key || '').length < 6) throw new Error('同步密碼至少 6 個字');
+    const cfg = { url, key, rev: 0, dirty: true };
+    await cloudCall({ a: 'ping' }, cfg);
+    Cloud.cfg = cfg; await Cloud.save();
+    await syncNow();
+    if (S.sync.state === 'err') throw new Error(S.sync.msg);
+  }
+  async function disconnectCloud() {
+    Cloud.cfg = null; await Cloud.save(); setSync('off');
   }
 
   /* ---------- 小工具 ---------- */
@@ -65,7 +196,7 @@
   }
   function defaults(d) {
     d = d || {};
-    d.v = 1; d.entries = d.entries || [];
+    d.v = 1; d.entries = d.entries || []; d.deleted = d.deleted || {};
     d.settings = Object.assign({ lockMin: 5, clipSec: 20 }, d.settings || {});
     d.settings.gen = Object.assign({ length: 16, upper: true, lower: true, digits: true, symbols: true, noAmbig: true }, d.settings.gen || {});
     return d;
@@ -140,8 +271,11 @@
       <input type="password" id="p2" autocomplete="new-password">
       <div class="err" id="err"></div>
       <button class="primary" id="go">建立</button>
-      <div style="margin-top:14px;text-align:center"><a href="#" id="restore" class="muted">或從備份檔（.pwvault）還原</a></div>
+      <div style="margin-top:14px;text-align:center;line-height:2">
+        <a href="#" id="fromcloud">☁ 已經在別台裝置用過？從 Google 雲端下載</a><br>
+        <a href="#" id="restore" class="muted">或從備份檔（.pwvault）還原</a></div>
     </div></div>`;
+    $('#fromcloud').onclick = e => { e.preventDefault(); cloudDialog(true); };
     const p1 = $('#p1'), p2 = $('#p2');
     p1.oninput = () => { $('#m1').innerHTML = meter(p1.value); };
     const go = async () => {
@@ -204,6 +338,7 @@
       S.session = r.session; S.data = defaults(r.data); S.fails = 0; S.lastAct = Date.now();
       S.v.edit = null; S.v.showPw = false;
       renderMain();
+      if (Cloud.cfg) syncNow();
       return true;
     } catch (e) {
       S.fails++;
@@ -212,7 +347,8 @@
   }
   function lock(reason) {
     if (!S.session) return;
-    S.session = null; S.data = null; S.v.edit = null; S.v.sel = null; S.v.q = '';
+    flushOnLock();
+    S.session = null; S.data = null; S.lastSealed = null; S.v.edit = null; S.v.sel = null; S.v.q = '';
     closeModal();
     renderUnlock();
     if (reason) toast(reason);
@@ -292,6 +428,7 @@
       ${tags.length ? '<h4>標籤</h4>' + tags.map(t => a('tag:' + t, '# ' + esc(t), st.tags[t])).join('') : ''}
       <h4>安全檢查</h4>${a('weak', '⚠ 弱密碼', st.weak, st.weak ? 'bad' : '')}${a('reused', '♻ 重複使用', st.reused, st.reused ? 'bad' : '')}
       <div class="grow"></div>
+      ${syncHtml()}
       <div class="tools">
         <button data-act="gen">🎲 密碼產生器</button>
         <button data-act="settings">⚙ 設定 / 備份</button>
@@ -447,6 +584,11 @@
         <div><label class="f">閒置自動上鎖</label><select id="s_lock">${opt([1, 3, 5, 10, 15, 30, 60, 0], st.lockMin, ' 分鐘')}</select></div>
         <div><label class="f">複製後清除剪貼簿</label><select id="s_clip">${opt([10, 20, 30, 60, 120, 0], st.clipSec, ' 秒')}</select></div>
       </div>
+      <section><h4>☁ Google 雲端同步</h4>
+        <div class="muted" style="font-size:13px;margin-bottom:6px">存在你自己的 Google 試算表；上傳的只有加密後的密文，Google 看不到內容。電腦和手機連同一個雲端就會自動同步。</div>
+        ${Cloud.cfg ? `<div style="font-size:13px;margin-bottom:6px">已連線（版本 ${Cloud.cfg.rev}${Cloud.cfg.at ? '，上次同步 ' + fmtTime(Cloud.cfg.at) : ''}）</div>
+          <div class="row" style="flex-wrap:wrap"><button id="s_sync">🔄 立即同步</button><button id="s_unlink" class="danger">中斷連線</button></div>`
+        : '<button id="s_link" class="primary">連線 Google 雲端</button>'}</section>
       <section><h4>🔑 主密碼</h4><button id="s_chpw">變更主密碼</button></section>
       <section><h4>💾 加密備份（建議定期做）</h4>
         <div class="muted" style="font-size:13px;margin-bottom:6px">備份檔（.pwvault）用目前的主密碼加密，可在電腦版和手機版之間互相匯入。</div>
@@ -459,9 +601,55 @@
       const saveOpts = () => { st.lockMin = +$('#s_lock', d).value; st.clipSec = +$('#s_clip', d).value; };
       $('#s_ok', d).onclick = async () => { saveOpts(); closeModal(); await persist(); renderDetail(); toast('設定已儲存'); };
       $('#s_chpw', d).onclick = () => { saveOpts(); changeMaster(); };
+      const sl = $('#s_link', d); if (sl) sl.onclick = () => { saveOpts(); cloudDialog(false); };
+      const ss = $('#s_sync', d); if (ss) ss.onclick = async () => { saveOpts(); closeModal(); await syncNow(); toast(S.sync.state === 'ok' ? '同步完成' : '同步失敗：' + S.sync.msg, 4000); };
+      const su = $('#s_unlink', d); if (su) su.onclick = async () => {
+        saveOpts();
+        if (await confirmBox('中斷雲端連線', '這台裝置將不再同步。雲端和本機的資料都會保留。', '中斷')) { await disconnectCloud(); toast('已中斷連線'); }
+      };
       $('#s_exp', d).onclick = () => { saveOpts(); exportBackup(); };
       $('#s_imp', d).onclick = () => { saveOpts(); closeModal(); pickFile(importFile); };
       $('#s_csv', d).onclick = () => { saveOpts(); exportCsv(); };
+    });
+  }
+  // download=true：還沒有本機密碼庫，直接從雲端下載（新手機 / 新電腦）
+  function cloudDialog(download) {
+    const preset = (window.PV_CLOUD_URL || '').trim();
+    openModal(`<h3>☁ ${download ? '從 Google 雲端下載' : '連線 Google 雲端'}</h3>
+      <div class="muted" style="font-size:13px">${download
+        ? '輸入雲端網址和同步密碼，下載後再用主密碼解鎖。'
+        : '第一次連線時輸入的同步密碼會成為這個雲端的同步密碼，其他裝置要輸入同一組。<br>同步密碼只用來存取雲端，主密碼仍然只有你知道。'}</div>
+      <label class="f">雲端網址（Apps Script 網頁應用程式）</label>
+      <input id="c_url" value="${esc(preset)}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" inputmode="url">
+      <label class="f">同步密碼</label><input id="c_key" type="password" autocomplete="off" ${preset ? 'autofocus' : ''}>
+      <div id="c_err" style="color:var(--danger);min-height:1.4em;margin-top:6px"></div>
+      <div class="btns"><button id="c_no">取消</button><button class="primary" id="c_ok">${download ? '下載' : '連線並同步'}</button></div>`, d => {
+      $('#c_no', d).onclick = closeModal;
+      const go = async () => {
+        const err = m => { $('#c_err', d).textContent = m; };
+        const url = $('#c_url', d).value.trim(), key = $('#c_key', d).value;
+        $('#c_ok', d).disabled = true; err(download ? '下載中…' : '連線中…');
+        try {
+          if (download) {
+            if (!okCloudUrl(url)) throw new Error('網址格式不對');
+            const cfg = { url, key, rev: 0, dirty: false };
+            const l = await cloudCall({ a: 'load' }, cfg);
+            if (!l.vault) throw new Error('雲端還沒有資料，請先在已有資料的裝置上「連線 Google 雲端」');
+            await Store.save(l.vault);
+            cfg.rev = l.rev; cfg.at = Date.now(); Cloud.cfg = cfg; await Cloud.save();
+            closeModal(); toast('已下載，請輸入主密碼解鎖', 4000); renderUnlock();
+          } else {
+            closeModal();
+            await connectCloud(url, key);
+            toast('已連線並同步完成', 4000);
+          }
+        } catch (e) {
+          if (download) { $('#c_ok', d).disabled = false; err(e.message); }
+          else toast('連線失敗：' + e.message, 6000);
+        }
+      };
+      $('#c_ok', d).onclick = go;
+      $('#c_key', d).onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) go(); };
     });
   }
   function changeMaster() {
@@ -594,10 +782,13 @@
       case 'del':
         if (await confirmBox('刪除', `確定刪除「<b>${esc(e.title)}</b>」？刪除後無法復原。`, '刪除', true)) {
           S.data.entries = S.data.entries.filter(x => x.id !== e.id); S.v.sel = null;
+          S.data.deleted[e.id] = Date.now();
           await persist(); renderAll(); toast('已刪除');
         }
         break;
       case 'settings': openSettings(); break;
+      case 'cloudset': cloudDialog(false); break;
+      case 'syncnow': syncNow(); break;
       case 'lock': lock(); break;
     }
   });
@@ -623,7 +814,13 @@
     if (m > 0 && Date.now() - S.lastAct > m * 60000) lock(`閒置 ${m} 分鐘，已自動上鎖`);
   }
   setInterval(idleCheck, 5000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) idleCheck(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { if (S.session && Cloud.cfg && Cloud.cfg.dirty) syncNow(); return; }
+    idleCheck();
+    if (S.session && Cloud.cfg) syncNow();
+  });
+  // 每 30 秒檢查雲端有沒有別台裝置的新版本（只查版本號，很省流量）
+  setInterval(() => { if (S.session && Cloud.cfg && !document.hidden && !SELFTEST) syncNow(); }, 30000);
 
   /* ---------- 自我測試 ---------- */
   async function selftest() {
@@ -670,9 +867,36 @@
         await new Promise(r => setTimeout(r, 3200));
         step('剪貼簿自動清除', (await S.api.clip_text()) === '');
       }
+      const curl = qs.get('cloud');
+      if (curl) {
+        // 模擬兩台裝置：B 直接改雲端（新增一筆、刪一筆），A 同時新增一筆，同步後兩邊都要齊
+        await connectCloud(curl, 'sync-key-123');
+        let bad = false;
+        try { await cloudCall({ a: 'rev' }, { url: curl, key: 'wrong-key' }); } catch (e) { bad = e.message === '同步密碼錯誤'; }
+        step('雲端連線並上傳', S.sync.state === 'ok' && Cloud.cfg.rev >= 1 && !Cloud.cfg.dirty, Cloud.cfg.rev);
+        step('雲端同步密碼錯誤被拒', bad);
+        const l1 = await cloudCall({ a: 'load' });
+        const b = await PV.openWith(l1.vault, S.session);
+        const victim = b.entries.find(e => e.title === 'Facebook');
+        b.entries = b.entries.filter(e => e !== victim);
+        b.deleted = Object.assign(b.deleted || {}, { [victim.id]: Date.now() });
+        b.entries.push(newEntry({ title: 'FromB', password: 'b-Pass-778899' }));
+        const sb = await cloudCall({ a: 'save', baseRev: l1.rev, vault: await PV.seal(S.session, b) });
+        S.data.entries.push(newEntry({ title: 'FromA', password: 'a-Pass-112233' }));
+        await persist();
+        await syncNow();
+        const titles = S.data.entries.map(e => e.title).sort().join(',');
+        step('衝突合併（本機）', sb.ok && titles.includes('FromA') && titles.includes('FromB') && !titles.includes('Facebook'), titles);
+        const l2 = await cloudCall({ a: 'load' });
+        const rt = (await PV.openWith(l2.vault, S.session)).entries.map(e => e.title).sort().join(',');
+        step('衝突合併（雲端）', rt === titles && !Cloud.cfg.dirty && l2.rev === Cloud.cfg.rev, l2.rev);
+        step('雲端只有密文', !l2.vault.includes('FromA') && !l2.vault.includes('Pass'));
+        const ok = await PV.open(l2.vault, 'New-主密碼-456');
+        step('雲端可用主密碼解開', ok.data.entries.length === S.data.entries.length);
+      }
       S.data.settings.lockMin = 1; S.lastAct = Date.now() - 61000; idleCheck();
       step('閒置自動上鎖', S.session === null);
-      step('最終存檔可用新密碼開啟', (await PV.open(await Store.load(), 'New-主密碼-456')).data.entries.length === 3);
+      step('最終存檔可用新密碼開啟', (await PV.open(await Store.load(), 'New-主密碼-456')).data.entries.length === (curl ? 4 : 3));
     } catch (e) { step('例外', false, String(e && e.stack || e)); }
     window.__selftest = R;
     if (DESKTOP) await S.api.selftest_done(JSON.stringify(R));
@@ -687,6 +911,7 @@
       app.innerHTML = '<div class="center"><div class="lock-card">此瀏覽器不支援加密功能（需 https 或本機網址）。</div></div>';
       return;
     }
+    await Cloud.load();
     if (SELFTEST) return selftest();
     (await Store.load()) ? renderUnlock() : renderSetup();
   }

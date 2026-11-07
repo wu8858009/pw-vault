@@ -56,6 +56,8 @@ label.f { display: block; margin: 10px 0 4px; font-size: 13px; color: var(--mute
 .side a .n { color: #8fa3bf; font-size: 12px; flex: none; }
 .side a.bad .n { color: #ffb4a8; }
 .side .grow { flex: 1; }
+.side a.sync { margin: 0 8px; font-size: 13px; background: rgba(255, 255, 255, .06); }
+.side a.sync.bad { color: #ffb4a8; }
 .side .tools { display: grid; gap: 6px; padding: 8px; }
 .side .tools button { background: rgba(255, 255, 255, .08); border-color: transparent; color: #fff; text-align: left; }
 

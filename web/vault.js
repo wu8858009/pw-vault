@@ -67,6 +67,39 @@
     return { session, data: JSON.parse(td.decode(pt)) };
   }
 
+  // 用已解鎖的金鑰開另一份檔案；salt/iter 不同（別台改過主密碼）回傳 null
+  async function openWith(text, session) {
+    const f = parseFile(text);
+    if (f.kdf.salt !== session.salt || f.kdf.iter !== session.iter) return null;
+    let pt;
+    try {
+      pt = await subtle.decrypt({ name: 'AES-GCM', iv: unb64(f.iv), additionalData: aad(f.kdf.iter, f.kdf.salt) },
+        session.key, unb64(f.ct));
+    } catch (e) { return null; }
+    return JSON.parse(td.decode(pt));
+  }
+
+  // 合併兩份資料：同 id 取 updatedAt 較新者；deleted = {id: 刪除時間} 墓碑；設定以 local 為準
+  const TOMB_DAYS = 365;
+  function merge(local, remote) {
+    const deleted = {};
+    for (const d of [remote.deleted || {}, local.deleted || {}])
+      for (const id in d) deleted[id] = Math.max(deleted[id] || 0, d[id]);
+    const map = new Map();
+    for (const e of (remote.entries || []).concat(local.entries || [])) {
+      const o = map.get(e.id);
+      if (!o || (e.updatedAt || 0) > (o.updatedAt || 0)) map.set(e.id, e);
+    }
+    const cut = Date.now() - TOMB_DAYS * 864e5;
+    for (const id in deleted) if (deleted[id] < cut) delete deleted[id];
+    const entries = [...map.values()].filter(e => !(deleted[e.id] && deleted[e.id] >= (e.updatedAt || 0)));
+    return Object.assign({}, remote, local, { entries, deleted });
+  }
+  function sameEntries(a, b) {
+    const k = d => JSON.stringify((d.entries || []).map(e => e.id + ':' + e.updatedAt).sort()) + JSON.stringify(Object.keys(d.deleted || {}).sort());
+    return k(a) === k(b);
+  }
+
   /* ---------- 密碼產生器 ---------- */
   const SETS = {
     upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
@@ -188,7 +221,7 @@
 
   function uid() { return Date.now().toString(36) + b64(rand(6)).replace(/[+/=]/g, ''); }
 
-  const api = { ITER, seal, open, newSession, parseFile, isVaultText, generate, strength, parseCSV, toCSV,
+  const api = { ITER, seal, open, openWith, merge, sameEntries, newSession, parseFile, isVaultText, generate, strength, parseCSV, toCSV,
     rowsToEntries, entriesToRows, hostOf, uid, b64, unb64 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PV = api;

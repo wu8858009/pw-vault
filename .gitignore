@@ -7,3 +7,5 @@ __pycache__/
 *.pwvault
 *.csv
 vault*.json
+cloud/.clasp.json
+.clasp.json
