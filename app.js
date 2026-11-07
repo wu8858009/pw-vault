@@ -905,7 +905,7 @@
         <div class="acts">
           ${trash ? `<button data-act="restore">${I('restore')}<span>還原</span></button><button class="danger-solid" data-act="purge">${I('trash')}<span>永久刪除</span></button>` : `
           <button class="icon ${e.fav ? 'fav-on' : ''}" data-act="fav" title="${e.fav ? '取消最愛' : '加入最愛'}">${I('star')}</button>
-          ${DESKTOP && e.type === 'login' && e.password ? `<button data-act="autotype" title="縮小視窗，3 秒後在目前游標位置輸入帳號、Tab、密碼、Enter">${I('kbd')}<span>自動輸入</span></button>` : ''}
+          ${DESKTOP && e.type === 'login' && e.password ? `<button data-act="autotype" title="視窗縮小後，點一下要登入的欄位就會自動輸入">${I('kbd')}<span>自動輸入</span></button>` : ''}
           <button data-act="dup" title="複製成新項目">${I('dup')}<span>複製</span></button>
           <button class="primary" data-act="edit">${I('edit')}<span>編輯</span></button>`}
         </div>
@@ -1001,7 +1001,9 @@
             <button class="icon" data-act="eye2" title="顯示/隱藏">${I('eye')}</button>
             <button class="icon" data-act="quickgen" title="直接產生一組強密碼">${I('dice')}</button>
             <button class="icon" data-act="gen2" title="產生器設定">${I('sliders')}</button></div>
-          <div id="e_meter">${meter(e.password)}</div></div>`;
+          <div id="e_meter">${meter(e.password)}</div></div>
+        ${DESKTOP ? `<div class="full"><label class="f">自動輸入順序（選填）</label>${inp('e_autotype', e.autotype || '', AT_DEFAULT, 'class="mono"')}
+          <div class="sl">可用 {USERNAME} {PASSWORD} {TAB} {ENTER} {DELAY 500}，或自訂欄位名稱，例如：{門市}{TAB}{USERNAME}{TAB}{PASSWORD}{ENTER}</div></div>` : ''}`;
     } else if (e.type === 'note') {
       main = `<div class="full"><label class="f">內容</label><textarea id="e_notes" style="min-height:220px" placeholder="只有你看得到的內容，例如保險箱密碼、備用碼…">${esc(e.notes)}</textarea></div>`;
     } else {
@@ -1043,7 +1045,7 @@
   function readEdit() {
     const e = S.v.edit; if (!e) return;
     const val = id => { const el = $('#' + id); return el ? el.value : null; };
-    for (const k of ['title', 'username', 'url', 'category']) { const v = val('e_' + k); if (v != null) e[k] = v.trim(); }
+    for (const k of ['title', 'username', 'url', 'category', 'autotype']) { const v = val('e_' + k); if (v != null) e[k] = v.trim(); }
     for (const k of ['password', 'notes']) { const v = val('e_' + k); if (v != null) e[k] = v; }
     for (const f of (TYPES[e.type] || TYPES.login).fields) { const v = val('d_' + f.k); if (v != null) e.data[f.k] = f.secret ? v : v.trim(); }
     const t = $('#e_tags'); if (t) e.tags = [...new Set(t.value.split(/[,，;；]/).map(s => s.trim()).filter(Boolean))];
@@ -1056,6 +1058,7 @@
     if (!e.title) e.title = PV.hostOf(e.url) || e.username || (e.data || {}).ssid || (e.data || {}).product || '';
     if (!e.title) { toast('請輸入名稱'); $('#e_title').focus(); return; }
     e.fields = e.fields.filter(f => f.n || f.v);
+    if (e.type === 'login' && e.autotype) { try { atItems(e); } catch (err) { toast(err.message, 6000); $('#e_autotype').focus(); return; } }
     const old = S.data.entries.find(x => x.id === e.id);
     e.updatedAt = Date.now();
     if (old) {
@@ -1266,7 +1269,7 @@
     if (kind === 'open') { closePalette(); S.v.sel = e.id; S.v.edit = null; S.v.filter = 'all'; renderAll(); return; }
     if (kind === 'type') {
       if (!DESKTOP || e.type !== 'login') return toast('自動輸入只支援桌面版的登入項目');
-      closePalette(); return autotype(e, true);
+      closePalette(); return autotype(e, pal.hot);
     }
     const [val, label] = kind === 'user' ? [e.username || (e.data || {}).holder || (e.data || {}).fullname, '帳號'] : mainSecret(e);
     if (!val) return toast('這個項目沒有' + label);
@@ -1274,15 +1277,51 @@
     closePalette();
     if (pal.hot && DESKTOP) setTimeout(() => S.api.hide(), 350);
   }
+  // 自動輸入順序：{USERNAME} {PASSWORD} {URL} {TAB} {ENTER} {DELAY 毫秒}，或 {自訂欄位名稱}，其他文字照打
+  const AT_DEFAULT = '{USERNAME}{TAB}{PASSWORD}{ENTER}';
+  function atItems(e) {
+    const seq = (e.autotype || '').trim() || AT_DEFAULT, items = [], re = /\{([^{}]+)\}|([^{}]+)/g;
+    let m;
+    while ((m = re.exec(seq))) {
+      if (m[2]) { items.push({ t: m[2] }); continue; }
+      const tok = m[1].trim(), up = tok.toUpperCase();
+      if (up === 'USERNAME' || tok === '帳號') items.push({ t: e.username || '' });
+      else if (up === 'PASSWORD' || tok === '密碼') items.push({ t: e.password || '' });
+      else if (up === 'URL' || tok === '網址') items.push({ t: e.url || '' });
+      else if (up === 'TAB') items.push({ k: 'tab' });
+      else if (up === 'ENTER') items.push({ k: 'enter' });
+      else if (/^DELAY\s+\d+$/i.test(tok)) items.push({ w: Math.min(5000, +tok.split(/\s+/)[1]) / 1000 });
+      else {
+        const f = (e.fields || []).find(x => x.n === tok);
+        if (!f) throw new Error(`自動輸入順序裡的「{${tok}}」找不到同名的自訂欄位`);
+        items.push({ t: f.v || '' });
+      }
+    }
+    return items.filter(x => !('t' in x) || x.t !== '');
+  }
+  function atHint() {
+    return new Promise(res => {
+      openModal(`${dh('kbd', '自動輸入')}
+        <ol style="margin:0;padding-left:20px;line-height:1.9;color:var(--text-2)">
+          <li>按「開始」後這個視窗會縮小。</li>
+          <li>到要登入的網頁或程式，<b>點一下第一個要輸入的欄位</b>（通常是帳號欄位）。</li>
+          <li>放開滑鼠後會自動輸入，20 秒內沒點會自動取消。</li></ol>
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="ah_off"> 下次不再顯示這個說明</label>
+        <div class="btns"><button id="ah_no">取消</button><button class="primary" id="ah_go" autofocus>${I('kbd')}開始</button></div>`, d => {
+        $('#ah_no', d).onclick = () => { closeModal(); res(false); };
+        $('#ah_go', d).onclick = async () => { if ($('#ah_off', d).checked) await Local.set('atHintOff', true); closeModal(); res(true); };
+      });
+    });
+  }
   async function autotype(e, usePrev) {
-    const items = [];
-    if (e.username) items.push({ t: e.username }, { k: 'tab' });
-    items.push({ t: e.password }, { k: 'enter' });
+    let items;
+    try { items = atItems(e); } catch (err) { return toast(err.message, 6000); }
+    if (!usePrev && !(await Local.get('atHintOff')) && !(await atHint())) return;
     log('autotype', e); useEntry(e);
     if (soonT) await persist();
-    const r = await S.api.autotype(items, !!usePrev, 3);
-    if (!r.target) toast('視窗已縮小，3 秒內請點選要輸入的帳號欄位', 3000);
+    await S.api.autotype(items, !!usePrev, 20);
   }
+  window.__pvAutotypeTimeout = () => toast('20 秒內沒有點選要輸入的欄位，已取消自動輸入', 5000);
 
   /* ================= 外洩檢查（Have I Been Pwned，k-匿名） ================= */
   async function breachCheck() {
@@ -1959,6 +1998,13 @@
       Object.assign(S.data.deks, ob.data.deks);
       const r2 = await mergeEntries(defaults(ob.data).entries, true); closeModal();
       step('匯入加密備份（含附件）', r2.added === 3 && (await attBytes(S.data.entries.find(e => e.title === '銀行').att[0])).length === png.length, r2);
+
+      // 自動輸入順序
+      const atE = newEntry({ username: 'u1', password: 'p1', fields: [{ n: '門市', v: 'W001', s: false }], autotype: '{門市}{TAB}{TAB}{USERNAME}{TAB}{DELAY 300}{PASSWORD}{ENTER}' });
+      const ai = atItems(atE);
+      let atBad = false; try { atItems(Object.assign({}, atE, { autotype: '{不存在}' })); } catch (err) { atBad = true; }
+      step('自動輸入順序解析', JSON.stringify(ai) === JSON.stringify([{ t: 'W001' }, { k: 'tab' }, { k: 'tab' }, { t: 'u1' }, { k: 'tab' }, { w: 0.3 }, { t: 'p1' }, { k: 'enter' }])
+        && JSON.stringify(atItems(newEntry({ username: 'a', password: 'b' }))) === '[{"t":"a"},{"k":"tab"},{"t":"b"},{"k":"enter"}]' && atBad);
 
       // 快速搜尋
       openPalette(); const q = $('#pal_q'); q.value = '玉山'; q.oninput();

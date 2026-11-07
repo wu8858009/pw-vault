@@ -1,6 +1,6 @@
 // 只快取程式本身；密碼庫存在 localStorage，不經過這裡
-const CACHE = 'pwvault-v6';
-const FILES = ['./', 'index.html', 'styles.css?v=6', 'config.js?v=6', 'vault.js?v=6', 'app.js?v=6', 'manifest.webmanifest',
+const CACHE = 'pwvault-v7';
+const FILES = ['./', 'index.html', 'styles.css?v=7', 'config.js?v=7', 'vault.js?v=7', 'app.js?v=7', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
