@@ -426,7 +426,7 @@ def main():
         + (f"&cloud={urllib.parse.quote(CLOUDTEST, safe='')}" if SELFTEST and CLOUDTEST else "") \
         + (f"&hibp={urllib.parse.quote(HIBPTEST, safe='')}" if SELFTEST and HIBPTEST else "")
     win = webview.create_window(APP_NAME, url, js_api=api, width=1240, height=800, min_size=(760, 540),
-                                background_color="#0a0f1c")
+                                background_color="#0a0f1c", maximized=True)
     api._window = win
 
     def on_hotkey(prev):

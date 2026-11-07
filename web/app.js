@@ -910,6 +910,7 @@
           <button class="primary" data-act="edit">${I('edit')}<span>編輯</span></button>`}
         </div>
       </div>
+      <div class="dcols">
       ${main ? `<div class="card"><h3>${I(T.icon, 'sm')}${e.type === 'login' ? '登入資訊' : T.name}</h3>${main}
         ${e.type === 'login' && e.password ? `<div class="cb">${meter(e.password)}${reused > 1 ? `<div class="sl s0">${I('repeat', 'sm')} 有 ${reused} 個項目使用相同密碼，建議更換</div>` : ''}
           ${breached(e) ? `<div class="sl s0">${I('globe', 'sm')} 這組密碼出現在已知外洩資料中 ${b.n.toLocaleString()} 次，請立即更換</div>` : ''}</div>` : ''}</div>` : ''}
@@ -923,6 +924,7 @@
       ${(e.history || []).length ? `<details class="card"><summary>${I('clock', 'sm')}舊密碼紀錄（${e.history.length}）</summary>
         ${e.history.map((h, i) => `<div class="hist-row"><span class="when">${fmtTime(h.at)} 停用</span><span class="val mono">${show ? esc(h.pw) : '••••••••••'}</span>
         <button class="icon ghost" data-act="cph" data-i="${i}" title="複製">${I('copy')}</button></div>`).join('')}</details>` : ''}
+      </div>
       <div class="metaline"><span>${I('plus', 'sm')}建立 ${fmtTime(e.createdAt)}</span><span>${I('edit', 'sm')}修改 ${fmtTime(e.updatedAt)}</span>
         <span>${I('chart', 'sm')}使用 ${u.n} 次・上次 ${ago(u.last)}</span><a href="#" data-act="audit_item">${I('activity', 'sm')}這筆的稽核紀錄</a></div>
       ${trash ? '' : `<div class="dangerzone"><button class="danger" data-act="del">${I('trash')}移到回收桶</button></div>`}
@@ -1011,6 +1013,7 @@
       <div class="hero"><button class="icon ghost back" data-act="cancel" title="返回">${I('back')}</button>
         <div class="av" style="background:var(--primary)">${I(T.icon)}</div>
         <div class="ht"><h2>${isNew ? '新增' + T.name : '編輯：' + esc(e.title)}</h2><div class="hs">標示 * 為必填，其餘可留白</div></div></div>
+      <div class="dcols">
       <div class="card"><h3>${I(T.icon, 'sm')}${T.name}</h3><div class="cb"><div class="form-grid">
         <div class="full"><label class="f">名稱 *</label>${inp('e_title', e.title, { login: '例如：Google、公司 VPN', card: '例如：玉山 Pi 卡', identity: '例如：我的護照', wifi: '例如：家裡 Wi-Fi', license: '例如：Office 2021', note: '例如：保險箱密碼' }[e.type])}</div>
         ${main}
@@ -1023,6 +1026,7 @@
         ${e.type === 'note' ? '' : `<div class="full"><label class="f">備註</label><textarea id="e_notes" placeholder="安全提問、PIN、備用碼…">${esc(e.notes)}</textarea></div>`}
         <div class="full"><label class="check"><input type="checkbox" id="e_fav" ${e.fav ? 'checked' : ''}> 加入我的最愛</label></div>
       </div></div></div>
+      </div>
       <div class="formbar"><button data-act="cancel">取消</button><button class="primary" data-act="save">${I('check')}儲存<kbd style="background:rgba(255,255,255,.15);border-color:transparent;color:#fff">Ctrl S</kbd></button></div>
     </div>`;
     const pw = $('#e_password'); if (pw) pw.oninput = ev => { $('#e_meter').innerHTML = meter(ev.target.value); };
