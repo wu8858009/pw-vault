@@ -80,7 +80,8 @@
   }
 
   // 合併兩份資料：同 id 取 updatedAt 較新者；deleted = {id: 刪除時間} 墓碑；設定以 local 為準
-  const TOMB_DAYS = 365;
+  // audit 依 i 聯集；usage 每台裝置取次數較多者；breach 取較新的檢查；deks 聯集
+  const TOMB_DAYS = 365, AUDIT_MAX = 3000;
   function merge(local, remote) {
     const deleted = {};
     for (const d of [remote.deleted || {}, local.deleted || {}])
@@ -93,11 +94,52 @@
     const cut = Date.now() - TOMB_DAYS * 864e5;
     for (const id in deleted) if (deleted[id] < cut) delete deleted[id];
     const entries = [...map.values()].filter(e => !(deleted[e.id] && deleted[e.id] >= (e.updatedAt || 0)));
-    return Object.assign({}, remote, local, { entries, deleted });
+    const am = new Map();
+    for (const a of (remote.audit || []).concat(local.audit || [])) am.set(a.i, a);
+    const audit = [...am.values()].sort((x, y) => x.t - y.t).slice(-AUDIT_MAX);
+    const usage = {};
+    for (const u of [remote.usage || {}, local.usage || {}])
+      for (const id in u) for (const dev in u[id]) {
+        const o = ((usage[id] = usage[id] || {})[dev]);
+        if (!o || u[id][dev][0] > o[0]) usage[id][dev] = u[id][dev];
+      }
+    const breach = Object.assign({}, remote.breach || {});
+    for (const id in local.breach || {}) if (!breach[id] || local.breach[id].at > breach[id].at) breach[id] = local.breach[id];
+    const deks = Object.assign({}, remote.deks || {}, local.deks || {});
+    return Object.assign({}, remote, local, { entries, deleted, audit, usage, breach, deks });
   }
   function sameEntries(a, b) {
-    const k = d => JSON.stringify((d.entries || []).map(e => e.id + ':' + e.updatedAt).sort()) + JSON.stringify(Object.keys(d.deleted || {}).sort());
+    const k = d => JSON.stringify((d.entries || []).map(e => e.id + ':' + e.updatedAt).sort()) + JSON.stringify(Object.keys(d.deleted || {}).sort())
+      + (d.audit || []).length + ':' + ((d.audit || []).slice(-1)[0] || {}).i + JSON.stringify(d.usage || {}) + JSON.stringify(d.breach || {}) + Object.keys(d.deks || {}).sort();
     return k(a) === k(b);
+  }
+
+  /* ---------- 附件加密（用存在密碼庫裡的隨機資料金鑰 DEK，換主密碼不受影響） ---------- */
+  function newDek() { return b64(rand(32)); }
+  async function dekKey(dekB64) { return subtle.importKey('raw', unb64(dekB64), 'AES-GCM', false, ['encrypt', 'decrypt']); }
+  async function encBytes(dekB64, u8) {
+    const iv = rand(12);
+    const ct = await subtle.encrypt({ name: 'AES-GCM', iv }, await dekKey(dekB64), u8);
+    return JSON.stringify({ iv: b64(iv), ct: b64(new Uint8Array(ct)) });
+  }
+  async function decBytes(dekB64, text) {
+    const f = JSON.parse(text);
+    return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: unb64(f.iv) }, await dekKey(dekB64), unb64(f.ct)));
+  }
+  async function hashHex(alg, s) {
+    const h = new Uint8Array(await subtle.digest(alg, typeof s === 'string' ? te.encode(s) : s));
+    return [...h].map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase();
+  }
+  // 小工具：任意字串 → AES 金鑰（生物辨識用）
+  async function rawKey(u8) { return subtle.importKey('raw', u8, 'AES-GCM', false, ['encrypt', 'decrypt']); }
+  async function encText(key, s) {
+    const iv = rand(12);
+    const ct = await subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(s));
+    return b64(iv) + '.' + b64(new Uint8Array(ct));
+  }
+  async function decText(key, t) {
+    const [iv, ct] = t.split('.');
+    return td.decode(await subtle.decrypt({ name: 'AES-GCM', iv: unb64(iv) }, key, unb64(ct)));
   }
 
   /* ---------- 密碼產生器 ---------- */
@@ -221,7 +263,7 @@
 
   function uid() { return Date.now().toString(36) + b64(rand(6)).replace(/[+/=]/g, ''); }
 
-  const api = { ITER, seal, open, openWith, merge, sameEntries, newSession, parseFile, isVaultText, generate, strength, parseCSV, toCSV,
+  const api = { ITER, seal, open, openWith, merge, sameEntries, newSession, newDek, encBytes, decBytes, hashHex, rawKey, encText, decText, rand, parseFile, isVaultText, generate, strength, parseCSV, toCSV,
     rowsToEntries, entriesToRows, hostOf, uid, b64, unb64 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PV = api;

@@ -238,6 +238,74 @@ input[type=range] { padding: 0; accent-color: var(--primary); border: 0; box-sha
 .toast::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 .toast.bad::before { background: #f26b6b; }
 
+/* ===== PRO 功能元件 ===== */
+svg.i.flip { transform: rotate(180deg); }
+.badge.plain { background: var(--line-2); color: var(--text-2); }
+.vswitch { width: 100%; justify-content: flex-start; background: var(--side-2); border: 1px solid var(--side-line); color: #fff; box-shadow: none; margin-bottom: 12px; padding: 8px 10px; }
+.vswitch:hover { background: #1a2540; color: #fff; border-color: #2b3a5c; }
+.vswitch .lbl { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; }
+.vswitch svg { color: var(--side-muted); }
+.vdot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.vtag { font-size: 10.5px; background: rgba(244, 183, 64, .18); color: var(--gold); border-radius: 4px; padding: 0 5px; font-weight: 700; }
+.vlist { display: grid; gap: 6px; }
+.vlist button { justify-content: flex-start; padding: 11px 12px; box-shadow: none; }
+.vlist button .lbl { flex: 1; text-align: left; }
+.vlist button.on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-ink); }
+.vpick { margin-bottom: 18px; }
+.bio-btn { margin-top: 10px; padding: 11px; width: 100%; }
+
+.list .bar .mbtns { display: flex; gap: 4px; align-items: center; }
+.list .bar .mbtns button { padding: 3px 8px; font-size: 12px; box-shadow: none; gap: 4px; }
+.list .bar.multi { background: var(--primary-soft); color: var(--primary-ink); padding-top: 8px; flex-wrap: wrap; gap: 6px; }
+.item .ck { color: var(--muted); display: flex; }
+.item.picked { background: var(--primary-soft); border-color: rgba(47, 91, 234, .25); }
+.item.picked .ck { color: var(--primary); }
+.item .clipc { color: var(--faint); display: flex; }
+.av svg { width: 19px; height: 19px; }
+.hero .av svg { width: 26px; height: 26px; }
+
+.card > h3 .h3btn { margin-left: auto; padding: 2px 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.fr.link { cursor: pointer; }
+.fr.link:hover { background: var(--subtle); }
+.fr.att .val a { font-weight: 500; }
+.notebody { padding: 14px 18px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; min-height: 60px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.health .hbtns { display: grid; gap: 8px; }
+
+.cfrow { display: grid; grid-template-columns: 1fr 1.4fr auto auto; gap: 8px; align-items: center; margin-top: 10px; }
+.cfrow .check { margin: 0; font-size: 12.5px; white-space: nowrap; }
+
+.tpick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.tpick button { flex-direction: column; padding: 18px 8px; gap: 8px; font-size: 14px; box-shadow: none; }
+.tpick button:hover { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-ink); }
+.tpick .ti { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--primary-soft); color: var(--primary); }
+
+.dialog.wide { width: min(780px, 100%); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -4px 0 4px; overflow-x: auto; }
+.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; box-shadow: none; background: none; padding: 9px 12px; color: var(--muted); }
+.tabs button.on { color: var(--primary); border-bottom-color: var(--primary); }
+.imgprev { background: var(--subtle); border-radius: 10px; display: grid; place-items: center; padding: 10px; }
+.imgprev img { max-width: 100%; max-height: 62vh; border-radius: 6px; }
+.prog { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: 14px; }
+.prog i { display: block; height: 100%; width: 0; background: var(--primary); transition: width .2s; }
+.audit { margin-top: 12px; max-height: 52vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.audit table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.audit th { position: sticky; top: 0; background: var(--subtle); text-align: left; font-size: 12px; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.audit td { padding: 7px 10px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+.audit tr.warnrow td { color: var(--danger); }
+
+.palette-wrap { position: fixed; inset: 0; z-index: 70; background: rgba(8, 12, 24, .45); backdrop-filter: blur(3px); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; animation: fade .12s; }
+.palette { width: min(640px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--sh-3); overflow: hidden; animation: pop .15s; }
+.palette .pin { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line-2); color: var(--muted); }
+.palette .pin input { border: 0; box-shadow: none !important; padding: 4px 0; font-size: 17px; background: transparent; }
+.palette .plist { max-height: 50vh; overflow-y: auto; padding: 6px; }
+.prow { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; cursor: pointer; }
+.prow .meta { flex: 1; min-width: 0; }
+.prow .t { font-weight: 600; } .prow .s { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prow.on { background: var(--primary-soft); }
+.ptype { font-size: 11.5px; color: var(--muted); }
+.palette .pfoot { display: flex; gap: 14px; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--line-2); background: var(--subtle); font-size: 12px; color: var(--muted); }
+
 /* 平板 */
 @media (max-width: 1100px) {
   .shell { grid-template-columns: 210px minmax(250px, 320px) 1fr; }
@@ -267,5 +335,10 @@ input[type=range] { padding: 0; accent-color: var(--primary); border: 0; box-sha
   .fr .k { grid-column: 1 / -1; }
   .hist-row .when { width: auto; }
   .dialog .grid2 { grid-template-columns: 1fr; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .tpick { grid-template-columns: repeat(2, 1fr); }
+  .cfrow { grid-template-columns: 1fr 1fr; }
+  .health { flex-wrap: wrap; }
+  .palette-wrap { padding-top: max(16px, env(safe-area-inset-top)); }
 }
 @media (min-width: 761px) { .menu-btn { display: none !important; } }

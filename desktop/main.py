@@ -5,6 +5,7 @@
   * 剪貼簿：不進 Win+V 剪貼簿歷程 / 雲端同步，並在 N 秒後自動清除
 測試：PWVAULT_DATA=<資料夾>（同時略過單一執行個體檢查）、PWVAULT_SELFTEST=<結果.json>
 """
+import base64
 import ctypes
 import ctypes.wintypes as wt
 import datetime
@@ -18,18 +19,22 @@ import urllib.parse
 import webbrowser
 from pathlib import Path
 
+import re
+
 import webview
 
+import winsys
+
 APP_NAME = "帳號密碼紀錄系統"
-VERSION = "1.0.0"
+VERSION = "1.3.0"
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 WEB = BASE / "web"
 DATA_DIR = Path(os.environ.get("PWVAULT_DATA") or Path(os.environ.get("APPDATA", Path.home())) / "PasswordVault")
-VAULT = DATA_DIR / "vault.json"
-BACKUPS = DATA_DIR / "backups"
-CLOUD = DATA_DIR / "cloud.json"
+LOCAL = DATA_DIR / "local.json"      # 裝置設定（保管庫清單、裝置名稱…；不含任何密碼）
+HELLO = DATA_DIR / "hello.json"      # Windows Hello：DPAPI 保護的主密碼
 SELFTEST = os.environ.get("PWVAULT_SELFTEST")
 CLOUDTEST = os.environ.get("PWVAULT_CLOUDTEST")  # 自我測試用的模擬雲端網址
+HIBPTEST = os.environ.get("PWVAULT_HIBPTEST")    # 自我測試用的假外洩資料庫
 KEEP_BACKUPS = 30
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -134,20 +139,48 @@ CLIP = Clipboard()
 
 
 # ---------------- 檔案 ----------------
+_WRITE_LOCK = threading.Lock()
+
+
 def write_atomic(path: Path, text: str):
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    # pywebview 會在不同執行緒同時呼叫 API，所以寫檔要排隊，暫存檔名也要各自不同
+    with _WRITE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f"{path.suffix}.{threading.get_ident()}.tmp")
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        for i in range(10):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if i == 9:
+                    raise
+                threading.Event().wait(0.05)
 
 
-def daily_backup(text: str):
-    BACKUPS.mkdir(parents=True, exist_ok=True)
-    write_atomic(BACKUPS / f"vault-{datetime.date.today():%Y%m%d}.json", text)
-    old = sorted(BACKUPS.glob("vault-*.json"))[:-KEEP_BACKUPS]
-    for p in old:
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def vdir(vid) -> Path:
+    """預設保管庫沿用舊路徑；其他保管庫在 vaults/<id>/"""
+    if not vid or vid == "default":
+        return DATA_DIR
+    if not re.fullmatch(r"[a-z0-9]{4,24}", str(vid)):
+        raise ValueError("bad vault id")
+    return DATA_DIR / "vaults" / vid
+
+
+def daily_backup(d: Path, text: str):
+    b = d / "backups"
+    write_atomic(b / f"vault-{datetime.date.today():%Y%m%d}.json", text)
+    for p in sorted(b.glob("vault-*.json"))[:-KEEP_BACKUPS]:
         p.unlink(missing_ok=True)
 
 
@@ -159,55 +192,115 @@ def looks_like_vault(text: str) -> bool:
         return False
 
 
+def att_path(vid, aid) -> Path:
+    if not re.fullmatch(r"[\w-]{6,40}", str(aid)):
+        raise ValueError("bad attachment id")
+    return vdir(vid) / "attachments" / f"{aid}.bin"
+
+
 class Api:
     def __init__(self):
         self._window = None
+        self._hotkey = None
+        self._kv_lock = threading.Lock()
 
-    def load_vault(self):
+    # ----- 密碼庫（每個保管庫一個資料夾） -----
+    def load_vault(self, vid=None):
+        v = vdir(vid) / "vault.json"
         try:
-            return VAULT.read_text(encoding="utf-8") if VAULT.exists() else None
+            return v.read_text(encoding="utf-8") if v.exists() else None
         except Exception:
-            bak = VAULT.with_suffix(".bak")
+            bak = v.with_suffix(".bak")
             return bak.read_text(encoding="utf-8") if bak.exists() else None
 
-    def save_vault(self, text):
+    def save_vault(self, text, vid=None):
         # 只接受加密格式，絕不把明文寫進磁碟
         if not looks_like_vault(text):
             return "格式錯誤，未寫入"
         try:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            if VAULT.exists():
-                write_atomic(VAULT.with_suffix(".bak"), VAULT.read_text(encoding="utf-8"))
-            write_atomic(VAULT, text)
-            daily_backup(text)
+            d = vdir(vid)
+            v = d / "vault.json"
+            if v.exists():
+                write_atomic(v.with_suffix(".bak"), v.read_text(encoding="utf-8"))
+            write_atomic(v, text)
+            daily_backup(d, text)
             return True
         except Exception as e:
             return str(e)
 
-    def get_cloud(self):
+    def get_cloud(self, vid=None):
+        c = vdir(vid) / "cloud.json"
         try:
-            return CLOUD.read_text(encoding="utf-8") if CLOUD.exists() else None
+            return c.read_text(encoding="utf-8") if c.exists() else None
         except Exception:
             return None
 
-    def set_cloud(self, text):
+    def set_cloud(self, text, vid=None):
         # 雲端網址 + 同步密碼（只保護雲端上的密文；主密碼不會存）
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        c = vdir(vid) / "cloud.json"
         if text:
-            write_atomic(CLOUD, text)
+            write_atomic(c, text)
         else:
-            CLOUD.unlink(missing_ok=True)
+            c.unlink(missing_ok=True)
         return True
 
-    def save_file(self, name, text):
+    def delete_vault(self, vid):
+        """移除這台電腦上的某個保管庫（不影響雲端）；預設保管庫不能刪"""
+        import shutil
+        if not vid or vid == "default":
+            return "預設保管庫不能移除"
+        shutil.rmtree(vdir(vid), ignore_errors=True)
+        self.hello_remove(vid)
+        return True
+
+    # ----- 裝置設定 -----
+    def kv_get(self, key):
+        return read_json(LOCAL, {}).get(str(key))
+
+    def kv_set(self, key, value):
+        with self._kv_lock:
+            d = read_json(LOCAL, {})
+            if value is None:
+                d.pop(str(key), None)
+            else:
+                d[str(key)] = value
+            write_atomic(LOCAL, json.dumps(d, ensure_ascii=False))
+        return True
+
+    # ----- 加密附件（本機快取） -----
+    def att_put(self, vid, aid, text):
+        write_atomic(att_path(vid, aid), text)
+        return True
+
+    def att_get(self, vid, aid):
+        p = att_path(vid, aid)
+        return p.read_text(encoding="utf-8") if p.exists() else None
+
+    def att_del(self, vid, aid):
+        att_path(vid, aid).unlink(missing_ok=True)
+        return True
+
+    # ----- 檔案輸出 -----
+    def _ask_path(self, name):
         r = self._window.create_file_dialog(webview.SAVE_DIALOG, directory=str(Path.home() / "Documents"), save_filename=name)
         if not r:
             return None
-        path = r if isinstance(r, str) else r[0]
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
+        return r if isinstance(r, str) else r[0]
+
+    def save_file(self, name, text):
+        path = self._ask_path(name)
+        if path:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
         return path
 
+    def save_bytes(self, name, b64):
+        path = self._ask_path(name)
+        if path:
+            Path(path).write_bytes(base64.b64decode(b64))
+        return path
+
+    # ----- 剪貼簿 / 網址 -----
     def copy(self, text, seconds=20):
         return CLIP.copy(str(text), int(seconds or 0))
 
@@ -218,8 +311,69 @@ class Api:
         if isinstance(url, str) and url.lower().startswith(("http://", "https://")):
             webbrowser.open(url)
 
+    # ----- 自動輸入 / 全域快速鍵 -----
+    def autotype(self, items, use_prev=True, delay=3):
+        own = winsys.own_hwnd(APP_NAME)
+        target = self._hotkey.prev if (use_prev and self._hotkey) else None
+        if self._hotkey:
+            self._hotkey.prev = None
+        threading.Thread(target=winsys.autotype, args=(own, target, items, delay), daemon=True).start()
+        return {"target": bool(target)}
+
+    def hotkey_info(self):
+        return {"ok": bool(self._hotkey and self._hotkey.ok), "prev": bool(self._hotkey and self._hotkey.prev)}
+
+    def hide(self):
+        own = winsys.own_hwnd(APP_NAME)
+        if own:
+            winsys.u32.ShowWindow(own, winsys.SW_MINIMIZE)
+        return True
+
+    # ----- Windows Hello（主密碼以 DPAPI 保護，解開前必須通過 Windows Hello） -----
+    def _hello_probe(self):
+        # WinRT 查詢可能很慢，啟動時在背景查一次就好
+        self._hello_code = winsys.hello_availability()
+
+    def hello_enrolled(self, vid=None):
+        return str(vid or "default") in read_json(HELLO, {})
+
+    def hello_status(self, vid=None):
+        code = getattr(self, "_hello_code", None)
+        if code is None:
+            return {"code": -2, "msg": "正在偵測 Windows Hello，請稍後再開一次設定", "enrolled": self.hello_enrolled(vid)}
+        return {"code": code, "msg": winsys.HELLO_STATUS.get(code, str(code)), "enrolled": self.hello_enrolled(vid)}
+
+    def hello_enroll(self, vid, secret):
+        try:
+            if not winsys.hello_verify("確認是你本人，啟用 Windows Hello 解鎖"):
+                return "Windows Hello 驗證未通過"
+            d = read_json(HELLO, {})
+            d[str(vid or "default")] = winsys.dpapi_protect(str(secret).encode("utf-8"))
+            write_atomic(HELLO, json.dumps(d))
+            return True
+        except Exception as e:
+            return f"無法啟用：{e}"
+
+    def hello_unlock(self, vid=None):
+        d = read_json(HELLO, {})
+        blob = d.get(str(vid or "default"))
+        if not blob:
+            return {"err": "尚未啟用"}
+        try:
+            if not winsys.hello_verify("解鎖帳號密碼紀錄"):
+                return {"err": "Windows Hello 驗證未通過"}
+            return {"pw": winsys.dpapi_unprotect(blob).decode("utf-8")}
+        except Exception as e:
+            return {"err": str(e)}
+
+    def hello_remove(self, vid=None):
+        d = read_json(HELLO, {})
+        d.pop(str(vid or "default"), None)
+        write_atomic(HELLO, json.dumps(d))
+        return True
+
     def info(self):
-        return {"data_dir": str(DATA_DIR), "version": VERSION}
+        return {"data_dir": str(DATA_DIR), "version": VERSION, "hotkey": bool(self._hotkey and self._hotkey.ok)}
 
     def selftest_done(self, result):
         Path(SELFTEST).write_text(result, encoding="utf-8")
@@ -269,10 +423,22 @@ def main():
     port = serve()
     api = Api()
     url = f"http://127.0.0.1:{port}/index.html?desktop=1" + ("&selftest=1" if SELFTEST else "") \
-        + (f"&cloud={urllib.parse.quote(CLOUDTEST, safe='')}" if SELFTEST and CLOUDTEST else "")
-    win = webview.create_window(APP_NAME, url, js_api=api, width=1180, height=760, min_size=(720, 520),
-                                background_color="#12161d")
+        + (f"&cloud={urllib.parse.quote(CLOUDTEST, safe='')}" if SELFTEST and CLOUDTEST else "") \
+        + (f"&hibp={urllib.parse.quote(HIBPTEST, safe='')}" if SELFTEST and HIBPTEST else "")
+    win = webview.create_window(APP_NAME, url, js_api=api, width=1240, height=800, min_size=(760, 540),
+                                background_color="#0a0f1c")
     api._window = win
+
+    def on_hotkey(prev):
+        own = winsys.own_hwnd(APP_NAME)
+        if prev == own:
+            api._hotkey.prev = None
+        winsys.bring_front(own)
+        win.evaluate_js("window.__pvPalette && window.__pvPalette()")
+
+    if not SELFTEST:
+        api._hotkey = winsys.Hotkey(on_hotkey)
+    threading.Thread(target=api._hello_probe, daemon=True).start()
 
     def on_closing():
         CLIP.clear_if_mine()
@@ -283,3 +449,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

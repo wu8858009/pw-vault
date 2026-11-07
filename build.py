@@ -17,6 +17,8 @@ def main() -> None:
         "--add-data", f"{ROOT / 'web'};web",
         "--add-data", f"{ico};desktop",
         "--exclude-module", "tkinter",
+        "--collect-submodules", "winrt.windows.security.credentials.ui",
+        "--collect-submodules", "winrt.windows.foundation",
         "--distpath", str(ROOT / "dist"),
         "--workpath", str(ROOT / "build"),
         "--specpath", str(ROOT / "build"),
