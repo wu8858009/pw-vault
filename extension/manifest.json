@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "帳號密碼紀錄 PRO",
+  "version": "1.4.0",
+  "description": "搭配「帳號密碼紀錄 PRO」桌面版：在登入頁自動填入、產生強密碼、登入後詢問是否儲存。",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": { "default_popup": "popup.html", "default_title": "帳號密碼紀錄 PRO" },
+  "background": { "service_worker": "bg.js" },
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["http://127.0.0.1:47321/*"],
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle",
+    "all_frames": true
+  }]
+}

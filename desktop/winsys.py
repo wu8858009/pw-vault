@@ -175,6 +175,96 @@ class Hotkey:
                     pass
 
 
+# ---------------- 偵測 Windows 鎖定／登出／睡眠 ----------------
+LRESULT = ctypes.c_ssize_t
+WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+
+
+class WNDCLASSW(ctypes.Structure):
+    _fields_ = [("style", wt.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wt.HINSTANCE), ("hIcon", wt.HICON), ("hCursor", wt.HANDLE), ("hbrBackground", wt.HBRUSH),
+                ("lpszMenuName", wt.LPCWSTR), ("lpszClassName", wt.LPCWSTR)]
+
+
+u32.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+u32.DefWindowProcW.restype = LRESULT
+u32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
+u32.CreateWindowExW.argtypes = [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                wt.HWND, wt.HMENU, wt.HINSTANCE, wt.LPVOID]
+u32.CreateWindowExW.restype = wt.HWND
+u32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+k32.GetModuleHandleW.restype = wt.HMODULE
+WM_WTSSESSION_CHANGE, WM_POWERBROADCAST = 0x02B1, 0x0218
+WTS_EVENTS = {2: "console_disconnect", 4: "remote_disconnect", 6: "logoff", 7: "lock"}
+PBT_APMSUSPEND = 4
+
+
+class SessionWatcher:
+    """用一個看不見的視窗接收 Windows 的鎖定／睡眠通知（不是 message-only，否則收不到睡眠通知）。"""
+
+    def __init__(self, on_event):
+        self.on_event = on_event
+        self.hwnd = None
+        self.ready = threading.Event()
+        threading.Thread(target=self._loop, daemon=True).start()
+        self.ready.wait(3)
+
+    def _proc(self, hwnd, msg, wp, lp):
+        try:
+            if msg == WM_WTSSESSION_CHANGE and wp in WTS_EVENTS:
+                self.on_event(WTS_EVENTS[wp])
+            elif msg == WM_POWERBROADCAST and wp == PBT_APMSUSPEND:
+                self.on_event("sleep")
+        except Exception:
+            pass
+        return u32.DefWindowProcW(hwnd, msg, wp, lp)
+
+    def _loop(self):
+        self._wndproc = WNDPROC(self._proc)  # 保留參考，避免被回收
+        hinst = k32.GetModuleHandleW(None)
+        wc = WNDCLASSW(0, self._wndproc, 0, 0, hinst, None, None, None, None, "PwVaultSessionWatcher")
+        u32.RegisterClassW(ctypes.byref(wc))
+        self.hwnd = u32.CreateWindowExW(0, "PwVaultSessionWatcher", "PwVaultSessionWatcher", 0, 0, 0, 0, 0, None, None, hinst, None)
+        try:
+            ctypes.WinDLL("wtsapi32").WTSRegisterSessionNotification(self.hwnd, 0)
+        except Exception:
+            pass
+        self.ready.set()
+        msg = wt.MSG()
+        while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            u32.TranslateMessage(ctypes.byref(msg))
+            u32.DispatchMessageW(ctypes.byref(msg))
+
+    def simulate(self, wts_event=7):
+        """測試用：假裝收到「螢幕已鎖定」"""
+        u32.PostMessageW(self.hwnd, WM_WTSSESSION_CHANGE, wts_event, 0)
+
+
+# ---------------- 開機自動啟動（目前使用者的 Run 機碼） ----------------
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def autostart_get(name):
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            return winreg.QueryValueEx(k, name)[0]
+    except OSError:
+        return None
+
+
+def autostart_set(name, command):
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if command:
+            winreg.SetValueEx(k, name, 0, winreg.REG_SZ, command)
+        else:
+            try:
+                winreg.DeleteValue(k, name)
+            except OSError:
+                pass
+
+
 # ---------------- DPAPI（綁定目前 Windows 使用者） ----------------
 class DATA_BLOB(ctypes.Structure):
     _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]

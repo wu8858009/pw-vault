@@ -26,6 +26,10 @@ def main():
     for n in (180, 192, 512):
         draw(n).save(OUT / f"icon-{n}.png")
     draw(256).save(ROOT / "desktop" / "app.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    ext = ROOT / "extension" / "icons"
+    ext.mkdir(parents=True, exist_ok=True)
+    for n in (16, 32, 48, 128):
+        draw(n).save(ext / f"{n}.png")
     print("icons ok")
 
 

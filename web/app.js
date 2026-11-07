@@ -1,7 +1,7 @@
 /* 帳號密碼紀錄 PRO — 介面（PWA 與桌面 exe 共用） */
 (function () {
   'use strict';
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
   const qs = new URLSearchParams(location.search);
   const DESKTOP = qs.has('desktop');
   const SELFTEST = qs.has('selftest');
@@ -318,7 +318,10 @@
     const h = hue(e.title), bg = `background:linear-gradient(135deg,hsl(${h} 62% 52%),hsl(${(h + 28) % 360} 58% 40%))`;
     if (e.type && e.type !== 'login') return `<div class="av" style="${bg}">${I(TYPES[e.type].icon)}</div>`;
     const ch = ([...(e.title || '?').trim()][0] || '?').toUpperCase();
-    return `<div class="av" style="${bg}">${esc(ch)}</div>`;
+    // 網站圖示：直接向該網站要 favicon（不經過第三方），載入失敗就留字母頭像
+    const host = S.data && S.data.settings.icons !== false && /^https?:\/\//i.test(normUrl(e.url)) && PV.hostOf(e.url);
+    const fav = host && /^[\w.-]+$/.test(host) ? `<img class="fav" src="https://${host}/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer">` : '';
+    return `<div class="av" style="${bg}">${esc(ch)}${fav}</div>`;
   }
   function fmtTime(t) {
     if (!t) return '';
@@ -346,7 +349,7 @@
     d = d || {};
     d.v = 1; d.entries = d.entries || []; d.deleted = d.deleted || {};
     d.audit = d.audit || []; d.usage = d.usage || {}; d.breach = d.breach || {}; d.deks = d.deks || {};
-    d.settings = Object.assign({ lockMin: 5, clipSec: 20 }, d.settings || {});
+    d.settings = Object.assign({ lockMin: 5, clipSec: 20, icons: true, lockOs: true }, d.settings || {});
     d.settings.gen = Object.assign({ length: 16, upper: true, lower: true, digits: true, symbols: true, noAmbig: true }, d.settings.gen || {});
     for (const e of d.entries) { e.type = e.type || 'login'; e.data = e.data || {}; e.fields = e.fields || []; e.att = e.att || []; e.tags = e.tags || []; }
     return d;
@@ -407,6 +410,7 @@
     unlock: '解鎖', unlock_fail: '解鎖失敗', bio_unlock: '生物辨識解鎖', view: '顯示機密', copy: '複製', create: '新增', edit: '修改',
     trash: '移到回收桶', restore: '還原', purge: '永久刪除', import: '匯入', export: '匯出加密備份', export_csv: '匯出 CSV',
     master: '變更主密碼', cloud: '連線雲端', autotype: '自動輸入', att_add: '新增附件', att_open: '開啟附件', att_del: '刪除附件',
+    fill: '瀏覽器填入', ext_save: '瀏覽器儲存', pair: '擴充功能配對',
     share: '產生邀請碼', report: '安全報告', kit: '緊急存取包', breach: '外洩檢查', batch: '批次操作', bio_on: '啟用生物辨識', bio_off: '停用生物辨識'
   };
   function log(a, e, extra, t) {
@@ -905,6 +909,7 @@
         <div class="acts">
           ${trash ? `<button data-act="restore">${I('restore')}<span>還原</span></button><button class="danger-solid" data-act="purge">${I('trash')}<span>永久刪除</span></button>` : `
           <button class="icon ${e.fav ? 'fav-on' : ''}" data-act="fav" title="${e.fav ? '取消最愛' : '加入最愛'}">${I('star')}</button>
+          ${e.type === 'wifi' && e.data.ssid ? `<button data-act="wifiqr" title="產生 QR Code，手機掃描即可連線">${I('wifi')}<span>QR Code</span></button>` : ''}
           ${DESKTOP && e.type === 'login' && e.password ? `<button data-act="autotype" title="視窗縮小後，點一下要登入的欄位就會自動輸入">${I('kbd')}<span>自動輸入</span></button>` : ''}
           <button data-act="dup" title="複製成新項目">${I('dup')}<span>複製</span></button>
           <button class="primary" data-act="edit">${I('edit')}<span>編輯</span></button>`}
@@ -1177,7 +1182,7 @@
     const blob = new Blob([u8], { type: mime || 'application/octet-stream' });
     if (/iPhone|iPad|Android/i.test(navigator.userAgent) && navigator.canShare) {
       const file = new File([blob], name, { type: blob.type });
-      if (navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: name }); return; } catch (err) { if (err.name === 'AbortError') return; } }
+      if (navigator.canShare({ files: [file] })) { pickerOpen(); try { await navigator.share({ files: [file], title: name }); return; } catch (err) { if (err.name === 'AbortError') return; } }
     }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
@@ -1185,7 +1190,7 @@
   function pickAny(cb) {
     const inp = document.createElement('input'); inp.type = 'file';
     inp.onchange = () => { if (inp.files[0]) cb(inp.files[0]); };
-    inp.click();
+    pickerOpen(); inp.click();
   }
 
   /* ================= 密碼產生器 ================= */
@@ -1323,6 +1328,71 @@
   }
   window.__pvAutotypeTimeout = () => toast('20 秒內沒有點選要輸入的欄位，已取消自動輸入', 5000);
 
+  /* ================= 瀏覽器擴充功能（由桌面版的本機橋接呼叫） ================= */
+  // 網域比對：a.google.com 和 accounts.google.com 視為同一個網站；IP 位址要完全相同
+  function baseHost(h) {
+    h = (h || '').toLowerCase().replace(/^www\./, '');
+    if (/^\d+(\.\d+){3}$/.test(h) || !h.includes('.')) return h;
+    const p = h.split('.'), sl2 = ['com', 'net', 'org', 'gov', 'edu', 'co', 'ac', 'or', 'ne', 'go', 'idv', 'mil'];
+    if (p.length > 2 && p[p.length - 1].length === 2 && sl2.includes(p[p.length - 2])) return p.slice(-3).join('.');
+    return p.slice(-2).join('.');
+  }
+  function siteMatch(entryUrl, pageUrl) { const a = baseHost(PV.hostOf(entryUrl)), b = baseHost(PV.hostOf(pageUrl)); return !!a && a === b; }
+  window.__pvExt = req => {
+    if (!S.session) return { ok: false, err: 'LOCKED', vault: curVault().name };
+    const logins = live().filter(e => e.type === 'login');
+    const pub = e => ({ id: e.id, title: e.title, username: e.username, fields: e.fields.filter(f => f.n).map(f => f.n), fav: e.fav });
+    switch (req.action) {
+      case 'status': return { ok: true, vault: curVault().name, count: logins.length };
+      case 'search': {
+        const q = (req.q || '').trim().toLowerCase();
+        let es = req.url ? logins.filter(e => siteMatch(e.url, req.url)) : logins;
+        if (q) es = es.filter(e => haystack(e).includes(q));
+        es.sort((a, b) => usageOf(b.id).n - usageOf(a.id).n || (b.fav - a.fav));
+        return { ok: true, vault: curVault().name, items: es.slice(0, 30).map(pub) };
+      }
+      case 'get': {
+        const e = logins.find(x => x.id === req.id);
+        if (!e || (req.strict && !siteMatch(e.url, req.url))) return { ok: false, err: 'NOT_FOUND' };
+        log('fill', e, PV.hostOf(req.url || '') || ''); useEntry(e);
+        return { ok: true, username: e.username, password: e.password, fields: e.fields.filter(f => f.n).map(f => ({ n: f.n, v: f.v })) };
+      }
+      case 'check': {
+        const same = logins.filter(e => siteMatch(e.url, req.url) && e.username === (req.username || ''));
+        if (!same.length) return { ok: true, state: 'new' };
+        return { ok: true, state: same.some(e => e.password === req.password) ? 'same' : 'update', id: same[0].id, title: same[0].title };
+      }
+      case 'save': {
+        const u = req.username || '', host = PV.hostOf(req.url || '');
+        if (!req.password) return { ok: false, err: 'NO_PASSWORD' };
+        let e = logins.find(x => siteMatch(x.url, req.url) && x.username === u);
+        if (e) {
+          if (e.password !== req.password) { e.history = [{ pw: e.password, at: Date.now() }].concat(e.history || []).slice(0, 10); e.password = req.password; e.pwAt = Date.now(); }
+          e.updatedAt = Date.now();
+        } else {
+          e = newEntry({ title: req.title || host || '新網站', url: req.url ? new URL(req.url).origin : '', username: u, password: req.password });
+          S.data.entries.push(e);
+        }
+        log('ext_save', e);
+        persist().then(() => { if ($('#shell')) renderAll(); }).catch(() => {});
+        return { ok: true, id: e.id, updated: !!e.history.length };
+      }
+      case 'generate': return { ok: true, password: PV.generate(S.data.settings.gen) };
+    }
+    return { ok: false, err: 'BAD_ACTION' };
+  };
+  window.__pvPairAsk = (name, code, rid) => {
+    if (SELFTEST) { S.api.bridge_pair_result(rid, true); return; }
+    openModal(`${dh('globe', '瀏覽器擴充功能要求連線')}
+      <p>「<b>${esc(name)}</b>」想要連線到帳號密碼紀錄，以便在網頁上自動填入帳號密碼。</p>
+      <div class="paircode">${esc(code)}</div>
+      <p class="muted" style="font-size:13px;text-align:center">請確認擴充功能畫面上顯示的是同一組數字。不是你本人操作的話請按「拒絕」。</p>
+      <div class="btns"><button id="pa_no">拒絕</button><button class="primary" id="pa_ok">${I('check')}允許</button></div>`, d => {
+      $('#pa_no', d).onclick = () => { closeModal(); S.api.bridge_pair_result(rid, false); };
+      $('#pa_ok', d).onclick = () => { closeModal(); S.api.bridge_pair_result(rid, true); if (S.data) log('pair', null, name); toast('已允許擴充功能連線'); };
+    });
+  };
+
   /* ================= 外洩檢查（Have I Been Pwned，k-匿名） ================= */
   async function breachCheck() {
     const es = live().filter(e => e.type === 'login' && e.password);
@@ -1361,6 +1431,28 @@
         : `<span class="s4">太好了，沒有任何密碼出現在已知外洩資料中。</span>${fail ? `（${fail} 組檢查失敗）` : ''}`;
     if (ok) ok.disabled = false;
     return { checked: pws.length, leak, fail };
+  }
+
+  /* ================= Wi-Fi QR Code ================= */
+  function wifiQrSvg(d) {
+    const q2 = s => String(s || '').replace(/([\\;,:"])/g, '\\$1');
+    const sec = /wep/i.test(d.security || '') ? 'WEP' : d.wpass ? 'WPA' : 'nopass';
+    const txt = `WIFI:T:${sec};S:${q2(d.ssid)};${d.wpass ? 'P:' + q2(d.wpass) + ';' : ''};`;
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+    const q = qrcode(0, 'M'); q.addData(txt, 'Byte'); q.make();
+    return { svg: q.createSvgTag({ cellSize: 8, margin: 3, scalable: true }), txt };
+  }
+  function wifiQr(e) {
+    const { svg } = wifiQrSvg(e.data);
+    log('view', e, 'Wi-Fi QR Code');
+    openModal(`${dh('wifi', e.title)}
+      <div class="qrbox">${svg}</div>
+      <div style="text-align:center;margin-top:10px"><b>${esc(e.data.ssid)}</b><div class="muted" style="font-size:13px">用手機相機掃描就能連上這個 Wi-Fi</div></div>
+      <div class="btns"><button id="qr_print">${I('printer')}列印</button><button class="primary" id="qr_ok">關閉</button></div>`, d => {
+      $('#qr_ok', d).onclick = closeModal;
+      $('#qr_print', d).onclick = () => printHtml('Wi-Fi ' + e.data.ssid, `<div style="text-align:center;margin-top:40px"><h1>Wi-Fi</h1>
+        <div style="width:300px;margin:20px auto">${svg}</div><h2 style="border:0">${esc(e.data.ssid)}</h2><p class="sub">用手機相機掃描即可連線</p></div>`);
+    });
   }
 
   /* ================= 列印：安全報告 / 緊急存取包 ================= */
@@ -1484,9 +1576,25 @@
         <section><h4>${I('finger', 'sm')}${Bio.label()} 解鎖 ${bio.enrolled ? '<span class="badge ok">已啟用</span>' : ''}</h4>
           <div class="desc">${bio.ok || bio.enrolled ? (DESKTOP ? '主密碼以 Windows 加密保護並綁定這台電腦的帳戶，解鎖前需通過 Windows Hello（臉部、指紋或 PIN）。' : '主密碼用這台裝置的生物辨識金鑰加密，只存在這台裝置，不會同步。') : '目前無法使用：' + esc(bio.msg)}</div>
           ${bio.enrolled ? `<button id="s_bio_off" class="danger">停用</button>` : `<button id="s_bio_on" class="primary" ${bio.ok ? '' : 'disabled'}>${I('finger')}啟用 ${Bio.label()}</button>`}</section>
+        <section><h4>${I('shield', 'sm')}自動上鎖時機</h4>
+          ${DESKTOP ? `<label class="check"><input type="checkbox" id="s_lockos" ${st.lockOs !== false ? 'checked' : ''}> Windows 鎖定螢幕（Win+L）、登出或睡眠時一起上鎖</label>`
+          : `<label class="f" style="margin-top:4px">切換到其他 App 或關閉螢幕後</label><select id="s_hidelock">${[[0, '立即上鎖'], [30, '30 秒後上鎖'], [60, '1 分鐘後上鎖'], [300, '5 分鐘後上鎖'], [-1, '不因此上鎖']].map(([v, t]) => `<option value="${v}" ${v === hideLockSec() ? 'selected' : ''}>${t}</option>`).join('')}</select>`}
+          <div class="desc" style="margin:4px 0 0">切到背景時畫面會先模糊，App 切換畫面不會露出密碼。</div></section>
+        <section><h4>${I('globe', 'sm')}網站圖示</h4>
+          <label class="check"><input type="checkbox" id="s_icons" ${st.icons !== false ? 'checked' : ''}> 清單顯示網站圖示</label>
+          <div class="desc" style="margin:4px 0 0">圖示直接向各網站下載（不經過第三方），該網站會知道有人讀取它的圖示。</div></section>
+        ${DESKTOP ? `<section><h4>${I('globe', 'sm')}Chrome／Edge 擴充功能</h4>
+          <div class="desc">在網頁登入頁顯示帳號清單一鍵填入、註冊時產生強密碼、登入後詢問是否儲存。帳密只在這台電腦的 App 和瀏覽器之間傳遞。</div>
+          <div id="s_ext" class="desc" style="color:var(--text-2)">讀取中…</div>
+          <ol class="desc" style="padding-left:18px;margin:6px 0">
+            <li>Chrome 網址列輸入 <span class="mono">chrome://extensions</span>（Edge 是 <span class="mono">edge://extensions</span>），打開右上角「開發人員模式」。</li>
+            <li>按「載入未封裝項目」，選下面按鈕開啟的「瀏覽器擴充功能」資料夾。</li>
+            <li>點瀏覽器右上角的擴充功能圖示 →「與桌面版配對」，回到這裡按「允許」。</li></ol>
+          <div class="row" style="flex-wrap:wrap"><button id="s_extdir">${I('folder')}開啟擴充功能資料夾</button><button id="s_extun" class="danger">取消所有配對</button></div></section>` : ''}
         <section><h4>${I('user', 'sm')}這台裝置</h4>
           <div class="desc">裝置名稱會出現在稽核紀錄，方便分辨是哪台裝置做的操作。</div>
           <div class="row"><input id="s_dev" value="${esc(S.dev.name)}" maxlength="30"><button id="s_dev_ok">儲存</button></div>
+          ${DESKTOP ? `<div id="s_tray" style="margin-top:10px"></div>` : ''}
           ${DESKTOP ? `<div class="desc" style="margin:10px 0 0">全域快速鍵 <kbd>Ctrl Alt P</kbd>：${hk ? '<span class="s4">已啟用</span>，在任何程式中按下即可叫出快速搜尋並自動輸入帳密。' : '<span class="s0">無法註冊（可能被其他程式占用）</span>'}</div>` : ''}</section>
       </div>
       <div data-pane="vault" class="hidden">
@@ -1507,6 +1615,9 @@
         <section><h4>${I('shield', 'sm')}加密備份</h4>
           <div class="desc">備份檔（.pwvault）以目前的主密碼加密，包含所有附件，可在電腦與手機之間互相匯入。</div>
           <div class="row" style="flex-wrap:wrap"><button id="s_exp">${I('download')}匯出加密備份</button><button id="s_imp">${I('upload')}匯入備份 / CSV</button></div></section>
+        <section><h4>${I('cloud', 'sm')}自動備份到 Google 雲端硬碟</h4>
+          <div class="desc">每週日凌晨 3 點，把每個保管庫的加密備份（.pwvault）存進你的雲端硬碟「帳號密碼紀錄備份」資料夾，各保留最近 12 份。</div>
+          <div id="s_bk">${Cloud.cfg ? '<span class="muted" style="font-size:13px">讀取狀態中…</span>' : '<span class="muted" style="font-size:13px">需先連線 Google 雲端</span>'}</div></section>
         <section><h4>${I('printer', 'sm')}緊急存取包</h4>
           <div class="desc">印出一張紙本說明（雲端網址、取回步驟、主密碼手寫欄），收在保險箱，裝置遺失也能取回資料。</div>
           <label class="check"><input type="checkbox" id="s_kitkey"> 一併印出同步密碼與邀請碼（紙本要妥善保管）</label>
@@ -1525,12 +1636,45 @@
           <button id="s_report">${I('printer')}產生安全報告</button></section>
       </div>
       <div class="btns"><button class="primary" id="s_ok">完成</button></div>`, d => {
-      const saveOpts = () => { st.lockMin = +$('#s_lock', d).value; st.clipSec = +$('#s_clip', d).value; };
+      const saveOpts = () => {
+        st.lockMin = +$('#s_lock', d).value; st.clipSec = +$('#s_clip', d).value; st.icons = $('#s_icons', d).checked;
+        const lo = $('#s_lockos', d); if (lo) st.lockOs = lo.checked;
+        const lh = $('#s_hidelock', d); if (lh) st.hideLock = +lh.value;
+      };
       $$('[data-tab]', d).forEach(b => b.onclick = () => {
         $$('[data-tab]', d).forEach(x => x.classList.toggle('on', x === b));
         $$('[data-pane]', d).forEach(p => p.classList.toggle('hidden', p.dataset.pane !== b.dataset.tab));
       });
       const on = (id, fn) => { const el = $('#' + id, d); if (el) el.onclick = () => { saveOpts(); fn(); }; };
+      const ext = $('#s_ext', d);
+      if (ext) S.api.bridge_info().then(b => { ext.innerHTML = b.ok ? `<span class="badge ok">本機連線已開啟</span>　已配對 ${b.paired} 個瀏覽器` : `<span class="badge bad">無法開啟本機連線</span>　埠 ${b.port} 被其他程式占用`; });
+      on('s_extdir', async () => { const p = await S.api.open_ext_dir(); if (!p) toast('找不到擴充功能資料夾'); });
+      on('s_extun', async () => { if (await confirmBox('取消所有配對', '所有已配對的瀏覽器都要重新配對才能自動填入。', '取消配對', true)) { await S.api.bridge_unpair(); toast('已取消所有配對'); ext.innerHTML = '<span class="badge ok">本機連線已開啟</span>　已配對 0 個瀏覽器'; } });
+      // 雲端硬碟自動備份狀態
+      const bk = $('#s_bk', d);
+      const drawBk = info => {
+        bk.innerHTML = `<div class="desc" style="color:var(--text-2);margin-bottom:8px">${info.scheduled ? '<span class="badge ok">每週自動備份中</span>' : '<span class="badge warn">尚未啟用</span>'}
+          ${info.last ? '　上次備份：' + fmtTime(Date.parse(info.last)) : ''}</div>
+          <div class="row" style="flex-wrap:wrap"><button id="s_bknow">${I('upload')}立即備份</button>${info.folderUrl ? `<button id="s_bkopen">${I('ext')}開啟備份資料夾</button>` : ''}</div>
+          ${info.scheduled ? '' : `<div class="desc" style="margin:8px 0 0">第一次要授權：開啟 <a href="#" id="s_bkhelp">Apps Script 編輯器</a>，上方選「setupBackup」按「執行」並允許存取雲端硬碟。</div>`}`;
+        $('#s_bknow', d).onclick = async () => {
+          $('#s_bknow', d).disabled = true; toast('備份中…', 8000);
+          try { const r = await cloudCall({ a: 'backup_now' }); drawBk(r.info); toast(`已備份 ${r.files.length} 個保管庫到 Google 雲端硬碟`, 4000); log('export', null, 'Google 雲端硬碟備份'); }
+          catch (e) { $('#s_bknow', d).disabled = false; toast('備份失敗：' + (/permission|授權|authoriz/i.test(e.message) ? '尚未授權雲端硬碟，請先在 Apps Script 執行 setupBackup' : e.message), 7000); }
+        };
+        const op = $('#s_bkopen', d); if (op) op.onclick = () => openUrl(info.folderUrl);
+        const hp = $('#s_bkhelp', d); if (hp) hp.onclick = ev => { ev.preventDefault(); openUrl('https://script.google.com/home'); };
+      };
+      if (bk && Cloud.cfg) cloudCall({ a: 'backup_info' }).then(drawBk).catch(e => { bk.innerHTML = `<span class="muted" style="font-size:13px">無法讀取：${esc(e.message)}</span>`; });
+      // 桌面版：開機自動啟動、按 X 縮到系統匣（裝置設定，不同步）
+      const trayBox = $('#s_tray', d);
+      if (trayBox) Promise.all([S.api.autostart_get(), Local.get('closeToTray')]).then(([as, ctt]) => {
+        trayBox.innerHTML = `<label class="check"><input type="checkbox" id="s_auto" ${as.on ? 'checked' : ''} ${as.frozen ? '' : 'disabled'}> 開機時自動在背景啟動（只顯示在系統匣）</label>
+          <label class="check"><input type="checkbox" id="s_ctt" ${ctt !== false ? 'checked' : ''} ${as.tray ? '' : 'disabled'}> 按視窗右上角 ✕ 時縮到系統匣，不結束程式</label>
+          <div class="desc" style="margin:2px 0 0">要真正結束程式：在工作列右下角的系統匣圖示按右鍵 →「結束」。</div>`;
+        $('#s_auto', d).onchange = async ev => { const r = await S.api.autostart_set(ev.target.checked); if (r !== true) { toast(r, 5000); ev.target.checked = !ev.target.checked; } else toast(ev.target.checked ? '已設定開機自動啟動' : '已取消開機自動啟動'); };
+        $('#s_ctt', d).onchange = ev => Local.set('closeToTray', ev.target.checked);
+      }).catch(() => {});
       $('#s_ok', d).onclick = async () => { saveOpts(); closeModal(); await persist(); renderAll(); toast('設定已儲存'); };
       on('s_chpw', changeMaster);
       on('s_bio_on', async () => {
@@ -1729,6 +1873,7 @@
     const blob = new Blob([text], { type: mime });
     const file = new File([blob], name, { type: mime });
     if (/iPhone|iPad|Android/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [file] })) {
+      pickerOpen();
       try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; }
     }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
@@ -1756,12 +1901,12 @@
   }
   function pickFile(cb) {
     const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = '.pwvault,.json,.csv,text/csv,application/json';
+    inp.type = 'file'; inp.accept = '.pwvault,.json,.csv,.xml,text/csv,application/json,text/xml';
     inp.onchange = async () => {
       const f = inp.files[0]; if (!f) return;
       try { await cb(await f.text(), f.name); } catch (e) { toast('讀取失敗：' + e.message, 5000); }
     };
-    inp.click();
+    pickerOpen(); inp.click();
   }
   // 合併：加密備份依 id 取較新的；CSV 依「網站+帳號+密碼」略過重複
   async function mergeEntries(list, byId) {
@@ -1783,7 +1928,7 @@
     return { added, updated, skipped };
   }
   async function importFile(text, name) {
-    let r;
+    let r, fmt = '加密備份';
     if (PV.isVaultText(text)) {
       const pw = await promptPw('匯入加密備份', `輸入「${esc(name || '備份檔')}」的主密碼`);
       if (pw == null) return;
@@ -1797,14 +1942,15 @@
       }
       r = await mergeEntries(defaults(od).entries, true);
     } else {
-      const list = PV.rowsToEntries(PV.parseCSV(text));
-      if (!list.length) return toast('CSV 裡沒有可匯入的資料', 4000);
-      r = await mergeEntries(list, false);
+      const res = PV.importAny(text);
+      fmt = res.fmt;
+      if (!res.entries.length) return toast('檔案裡沒有可匯入的資料', 4000);
+      r = await mergeEntries(res.entries, false);
     }
-    log('import', null, `${name || ''}：新增 ${r.added}、更新 ${r.updated}`);
+    log('import', null, `${name || ''}（${fmt}）：新增 ${r.added}、更新 ${r.updated}`);
     S.v.filter = 'all'; renderAll();
-    openModal(`${dh('check', '匯入完成')}<p>新增 <b>${r.added}</b> 筆${r.updated ? `、更新 ${r.updated} 筆` : ''}、略過重複 ${r.skipped} 筆。</p>
-      ${/\.csv$/i.test(name || '') ? `<div class="notice">${I('alert', 'sm')}<span>請記得刪除剛才的 CSV 檔（它沒有加密）。</span></div>` : ''}
+    openModal(`${dh('check', '匯入完成')}<p>格式：${esc(fmt)}<br>新增 <b>${r.added}</b> 筆${r.updated ? `、更新 ${r.updated} 筆` : ''}、略過重複 ${r.skipped} 筆。</p>
+      ${fmt !== '加密備份' ? `<div class="notice">${I('alert', 'sm')}<span>請記得刪除剛才匯入的檔案（它沒有加密）。</span></div>` : ''}
       <div class="btns"><button class="primary" id="ok" autofocus>好</button></div>`, d => { $('#ok', d).onclick = closeModal; });
     return r;
   }
@@ -1865,6 +2011,7 @@
       case 'att_add': pickAny(f => addAttachment(e, f)); break;
       case 'att_open': { const a = e.att.find(x => x.id === b.dataset.a); if (a) openAttachment(e, a); break; }
       case 'att_del': { const a = e.att.find(x => x.id === b.dataset.a); if (a) deleteAttachment(e, a); break; }
+      case 'wifiqr': wifiQr(e); break;
       case 'audit': openAudit(); break;
       case 'audit_item': openAudit(e.id); break;
       case 'breach': breachCheck(); break;
@@ -1901,11 +2048,33 @@
     if (m > 0 && Date.now() - S.lastAct > m * 60000) lock(`閒置 ${m} 分鐘，已自動上鎖`);
   }
   setInterval(idleCheck, 5000);
+  // 切到背景：先模糊畫面（手機的 App 切換畫面不會露出密碼），手機版可設定立即上鎖
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { if (S.session && Cloud.cfg && (Cloud.cfg.dirty || soonT)) persist().then(syncNow).catch(() => {}); return; }
+    document.body.classList.toggle('privacy', document.hidden && !!S.session);
+    const hl = S.data ? hideLockSec() : -1;
+    if (document.hidden) {
+      S.hiddenAt = Date.now();
+      if (S.session && hl === 0 && Date.now() > (S.pickerUntil || 0)) {
+        const done = () => lock('切到背景，已自動上鎖');
+        if (Cloud.cfg && (Cloud.cfg.dirty || soonT)) persist().then(syncNow).finally(done); else done();
+        return;
+      }
+      if (S.session && Cloud.cfg && (Cloud.cfg.dirty || soonT)) persist().then(syncNow).catch(() => {});
+      return;
+    }
+    if (S.session && hl > 0 && S.hiddenAt && Date.now() - S.hiddenAt > hl * 1000 && Date.now() > (S.pickerUntil || 0)) { lock('離開超過 ' + (hl >= 60 ? hl / 60 + ' 分鐘' : hl + ' 秒') + '，已自動上鎖'); return; }
     idleCheck();
     if (S.session && Cloud.cfg) syncNow();
   });
+  // 切到背景後多久上鎖（秒）：0 = 立即，-1 = 不因背景上鎖；桌面版改用 Windows 鎖定事件
+  function hideLockSec() { if (DESKTOP || SELFTEST) return -1; const v = S.data.settings.hideLock; return v == null ? 60 : v; }
+  // 開檔案選擇器／分享面板時頁面會短暫進背景，不要因此上鎖
+  function pickerOpen() { S.pickerUntil = Date.now() + 120000; }
+  // 桌面版：Windows 鎖定螢幕、登出或睡眠時由主程式呼叫
+  window.__pvLock = (reason, force) => { if (S.session && (force || S.data.settings.lockOs !== false)) lock(reason || '電腦已鎖定，密碼庫一併上鎖'); };
+  // 網站圖示載入失敗就移除，露出底下的字母頭像
+  document.addEventListener('error', ev => { if (ev.target.classList && ev.target.classList.contains('fav')) ev.target.remove(); }, true);
+  document.addEventListener('load', ev => { const t = ev.target; if (t.classList && t.classList.contains('fav') && t.naturalWidth < 8) t.remove(); }, true);
   // 每 30 秒檢查雲端有沒有別台裝置的新版本（只查版本號，很省流量）
   setInterval(() => { if (S.session && Cloud.cfg && !document.hidden && !SELFTEST) syncNow(); }, 30000);
 
@@ -2006,6 +2175,23 @@
       step('自動輸入順序解析', JSON.stringify(ai) === JSON.stringify([{ t: 'W001' }, { k: 'tab' }, { k: 'tab' }, { t: 'u1' }, { k: 'tab' }, { w: 0.3 }, { t: 'p1' }, { k: 'enter' }])
         && JSON.stringify(atItems(newEntry({ username: 'a', password: 'b' }))) === '[{"t":"a"},{"k":"tab"},{"t":"b"},{"k":"enter"}]' && atBad);
 
+      // Wi-Fi QR
+      const qr = wifiQrSvg({ ssid: '家裡;5G', wpass: 'p:w"1', security: 'WPA2' });
+      step('Wi-Fi QR Code', qr.txt === 'WIFI:T:WPA;S:家裡\\;5G;P:p\\:w\\"1;;' && /<svg[\s\S]*<path/.test(qr.svg), qr.txt);
+
+      // 其他密碼管理器的匯入格式
+      const bw = PV.importAny(JSON.stringify({ encrypted: false, folders: [{ id: 'f1', name: '工作' }], items: [
+        { type: 1, name: 'BW Login', folderId: 'f1', favorite: true, login: { username: 'bwu', password: 'bwp-12345678', uris: [{ uri: 'https://bw.example.com' }], totp: 'JBSWY3DPEHPK3PXP' } },
+        { type: 3, name: 'BW Card', card: { cardholderName: 'A B', number: '5555444433331111', expMonth: '7', expYear: '2030', code: '321', brand: 'Visa' } },
+        { type: 2, name: 'BW Note', notes: 'secret note' }] }));
+      step('匯入 Bitwarden JSON', bw.fmt === 'Bitwarden JSON' && bw.entries[0].category === '工作' && bw.entries[0].fields[0].s && bw.entries[1].type === 'card' && bw.entries[1].data.exp === '07/30' && bw.entries[2].type === 'note');
+      const kp = PV.importAny('<?xml version="1.0"?><KeePassFile><Root><Group><Name>Root</Name><Group><Name>網銀</Name><Entry><String><Key>Title</Key><Value>KP 銀行</Value></String><String><Key>UserName</Key><Value>kpu</Value></String><String><Key>Password</Key><Value ProtectToMemory="True">kpp</Value></String><String><Key>URL</Key><Value>https://kp.bank</Value></String><String><Key>門市</Key><Value>W001</Value></String></Entry></Group><Group><Name>Recycle Bin</Name><Entry><String><Key>Title</Key><Value>垃圾</Value></String></Entry></Group></Group></Root></KeePassFile>');
+      step('匯入 KeePass XML', kp.entries.length === 1 && kp.entries[0].category === '網銀' && kp.entries[0].password === 'kpp' && kp.entries[0].fields[0].n === '門市');
+      const lp = PV.importAny('url,username,password,totp,extra,name,grouping,fav\r\nhttps://lp.com,lpu,lpp,,備註,LastPass 項目,購物,1\r\nhttp://sn,,,,保險箱內容,LP 筆記,,0\r\n');
+      step('匯入 LastPass CSV', lp.entries[0].category === '購物' && lp.entries[0].fav && lp.entries[0].notes === '備註' && lp.entries[1].type === 'note');
+      const kx = PV.importAny('"Group","Title","Username","Password","URL","Notes","TOTP"\r\n"Root/公司","KX","kxu","kxp","https://kx.com","","otpauth://totp/x"\r\n');
+      step('匯入 KeePassXC CSV', kx.entries[0].category === 'Root/公司' && kx.entries[0].fields[0].v.startsWith('otpauth'));
+
       // 快速搜尋
       openPalette(); const q = $('#pal_q'); q.value = '玉山'; q.oninput();
       step('快速搜尋', pal.list.length === 1 && pal.list[0].type === 'card'); closePalette();
@@ -2054,6 +2240,8 @@
         const rt = (await PV.openWith(l2.vault, S.session)).entries.filter(e => !e.trashedAt).map(e => e.title).sort().join(',');
         step('衝突合併（雲端）', rt === titles && !Cloud.cfg.dirty && l2.rev === Cloud.cfg.rev, l2.rev);
         step('雲端只有密文', !l2.vault.includes('FromA') && !l2.vault.includes('Pass'));
+        const bkr = await cloudCall({ a: 'backup_now' });
+        step('備份到 Google 雲端硬碟', bkr.files.length === 1 && /帳號密碼備份-個人-.*\.pwvault$/.test(bkr.files[0]) && bkr.info.last, bkr.files);
 
         // 共用保管庫：新增 → 連線（獨立命名空間與同步密碼）→ 邀請碼 → 另一個「裝置」加入
         const mainVid = S.vid;
@@ -2075,6 +2263,16 @@
         step('共用主密碼解鎖', (await unlock('Team-主密碼-999')) === true && live().some(e => e.title === '公司 VPN'));
         await switchVault(mainVid);
         step('切回個人保管庫', S.vid === mainVid && (await unlock('New-主密碼-456')) === true && !live().some(e => e.title === '公司 VPN'));
+      }
+      if (DESKTOP && S.session) {
+        const bt = await S.api.bridge_selftest();
+        step('擴充功能橋接：擋下一般網頁、未配對被拒', bt.web_blocked && bt.unpaired === 'NOT_PAIRED', bt.unpaired);
+        step('擴充功能橋接：配對', bt.paired && bt.code);
+        step('擴充功能橋接：依網站找帳號並取得密碼', bt.search.items && bt.search.items.length >= 1 && bt.get && bt.get.password === 'Xq,7"Lm-Bank#9z', bt.search);
+        step('擴充功能橋接：儲存新登入', bt.save.ok && bt.check.state === 'same' && live().some(e => e.username === 'ext-user' && e.url === 'https://new.example.com'), bt.check);
+        await S.api.test_os_lock(); await wait(800);
+        step('Windows 鎖定螢幕時一起上鎖', S.session === null);
+        await unlock('New-主密碼-456');
       }
       S.data.settings.lockMin = 1; S.lastAct = Date.now() - 61000; idleCheck();
       step('閒置自動上鎖', S.session === null);

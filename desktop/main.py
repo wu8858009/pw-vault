@@ -23,10 +23,11 @@ import re
 
 import webview
 
+import bridge
 import winsys
 
 APP_NAME = "帳號密碼紀錄系統"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 WEB = BASE / "web"
 DATA_DIR = Path(os.environ.get("PWVAULT_DATA") or Path(os.environ.get("APPDATA", Path.home())) / "PasswordVault")
@@ -202,6 +203,10 @@ class Api:
     def __init__(self):
         self._window = None
         self._hotkey = None
+        self._tray = None
+        self._watcher = None
+        self._bridge = None
+        self._quitting = False
         self._kv_lock = threading.Lock()
 
     # ----- 密碼庫（每個保管庫一個資料夾） -----
@@ -377,8 +382,73 @@ class Api:
         write_atomic(HELLO, json.dumps(d))
         return True
 
+    # ----- 開機自動啟動 / 系統匣 -----
+    def autostart_get(self):
+        cur = winsys.autostart_get(APP_NAME)
+        return {"on": bool(cur), "frozen": bool(getattr(sys, "frozen", False)), "tray": bool(self._tray)}
+
+    def autostart_set(self, on):
+        if not getattr(sys, "frozen", False):
+            return "只有安裝版（exe）可以設定開機自動啟動"
+        try:
+            winsys.autostart_set(APP_NAME, f'"{sys.executable}" --background' if on else None)
+            return True
+        except Exception as e:
+            return str(e)
+
+    # ----- 瀏覽器擴充功能橋接 -----
+    def bridge_info(self):
+        b = self._bridge
+        return {"ok": bool(b and b.ok), "port": bridge.PORT, "paired": len(self.kv_get("ext_tokens") or {})}
+
+    def bridge_pair_result(self, rid, ok):
+        return self._bridge.pair_result(rid, ok) if self._bridge else False
+
+    def bridge_unpair(self):
+        return self._bridge.unpair_all() if self._bridge else False
+
+    def open_ext_dir(self):
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else BASE / "extension"
+        d = base / "瀏覽器擴充功能" if getattr(sys, "frozen", False) else base
+        if d.exists():
+            os.startfile(str(d))
+            return str(d)
+        return None
+
+    def bridge_selftest(self):
+        """自我測試用：假裝成擴充功能打本機橋接（配對 → 搜尋 → 取帳密 → 儲存），並確認一般網頁會被擋"""
+        import urllib.request
+
+        def post(body, origin="chrome-extension://selftest"):
+            req = urllib.request.Request(f"http://127.0.0.1:{bridge.PORT}/v1", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json", "Origin": origin}, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    return json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return {"http": e.code}
+        out = {"web_blocked": post({"action": "hello"}, origin="https://evil.example").get("http") == 403}
+        out["unpaired"] = post({"action": "search", "url": "https://x"}).get("err")
+        ps = post({"action": "pair_start", "name": "selftest"})
+        p = post({"action": "pair_wait", "rid": ps.get("rid")})
+        tok = p.get("token")
+        out["code"] = len(ps.get("code") or "") == 6
+        out["paired"] = bool(tok)
+        out["search"] = post({"action": "search", "url": "https://www.bank.example.tw/login", "token": tok})
+        hits = (out["search"] or {}).get("items") or []
+        out["get"] = post({"action": "get", "id": hits[0]["id"], "token": tok}) if hits else None
+        out["save"] = post({"action": "save", "url": "https://new.example.com/login", "username": "ext-user", "password": "Ext-Pass-2026!", "token": tok})
+        out["check"] = post({"action": "check", "url": "https://new.example.com/", "username": "ext-user", "password": "Ext-Pass-2026!", "token": tok})
+        return out
+
+    def test_os_lock(self):
+        """自我測試用：模擬 Windows 鎖定螢幕"""
+        if self._watcher:
+            self._watcher.simulate(7)
+        return bool(self._watcher)
+
     def info(self):
-        return {"data_dir": str(DATA_DIR), "version": VERSION, "hotkey": bool(self._hotkey and self._hotkey.ok)}
+        return {"data_dir": str(DATA_DIR), "version": VERSION, "hotkey": bool(self._hotkey and self._hotkey.ok), "tray": bool(self._tray)}
 
     def selftest_done(self, result):
         Path(SELFTEST).write_text(result, encoding="utf-8")
@@ -412,10 +482,48 @@ def single_instance() -> bool:
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         hwnd = u32.FindWindowW(None, APP_NAME)
         if hwnd:
-            u32.ShowWindow(hwnd, 9)
+            u32.ShowWindow(hwnd, 5)   # 可能藏在系統匣，先顯示
+            u32.ShowWindow(hwnd, 3)   # 最大化
             u32.SetForegroundWindow(hwnd)
         return False
     return True
+
+
+def start_tray(api, win):
+    """系統匣圖示：關閉視窗後仍在背景執行，Ctrl+Alt+P 隨時可用"""
+    try:
+        import pystray
+        from PIL import Image
+    except Exception:
+        return None
+
+    def show(*_):
+        win.show()
+        win.maximize()
+        winsys.bring_front(winsys.own_hwnd(APP_NAME))
+
+    def palette(*_):
+        show()
+        win.evaluate_js("window.__pvPalette && window.__pvPalette()")
+
+    def lock(*_):
+        win.evaluate_js("window.__pvLock && window.__pvLock('已從系統匣上鎖', true)")
+
+    def quit_app(*_):
+        api._quitting = True
+        icon.stop()
+        win.destroy()
+
+    img = Image.open(BASE / "desktop" / "app.ico")
+    menu = pystray.Menu(
+        pystray.MenuItem("開啟帳號密碼紀錄", show, default=True),
+        pystray.MenuItem("快速搜尋（Ctrl+Alt+P）", palette),
+        pystray.MenuItem("立即上鎖", lock),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("結束", quit_app))
+    icon = pystray.Icon("PwVault", img, APP_NAME, menu)
+    icon.run_detached()
+    return icon
 
 
 def main():
@@ -425,28 +533,56 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PwVault.Desktop")
     except Exception:
         pass
+    background = "--background" in sys.argv   # 開機自動啟動：只放系統匣，不跳出視窗
     port = serve()
     api = Api()
     url = f"http://127.0.0.1:{port}/index.html?desktop=1" + ("&selftest=1" if SELFTEST else "") \
         + (f"&cloud={urllib.parse.quote(CLOUDTEST, safe='')}" if SELFTEST and CLOUDTEST else "") \
         + (f"&hibp={urllib.parse.quote(HIBPTEST, safe='')}" if SELFTEST and HIBPTEST else "")
     win = webview.create_window(APP_NAME, url, js_api=api, width=1240, height=800, min_size=(760, 540),
-                                background_color="#0a0f1c", maximized=True)
+                                background_color="#0a0f1c", maximized=True, hidden=background)
     api._window = win
 
     def on_hotkey(prev):
         own = winsys.own_hwnd(APP_NAME)
         if prev == own:
             api._hotkey.prev = None
+        if not u32.IsWindowVisible(own):
+            win.show()
+            win.maximize()
         winsys.bring_front(own)
         win.evaluate_js("window.__pvPalette && window.__pvPalette()")
 
     if not SELFTEST:
         api._hotkey = winsys.Hotkey(on_hotkey)
+        api._tray = start_tray(api, win)
     threading.Thread(target=api._hello_probe, daemon=True).start()
 
+    # 瀏覽器擴充功能的本機橋接（自我測試時改用別的埠，避免和正在用的 App 衝突）
+    def show_window():
+        own = winsys.own_hwnd(APP_NAME)
+        if not u32.IsWindowVisible(own):
+            win.show()
+            win.maximize()
+        winsys.bring_front(own)
+    if os.environ.get("PWVAULT_BRIDGEPORT"):
+        bridge.PORT = int(os.environ["PWVAULT_BRIDGEPORT"])
+    api._bridge = bridge.Bridge(api, win.evaluate_js, show_window)
+    api._bridge.start()
+
+    # Windows 鎖定螢幕、登出、睡眠 → 密碼庫一起上鎖
+    reasons = {"lock": "電腦已鎖定，密碼庫一併上鎖", "sleep": "電腦進入睡眠，密碼庫一併上鎖", "logoff": "Windows 登出，密碼庫已上鎖"}
+    api._watcher = winsys.SessionWatcher(
+        lambda ev: win.evaluate_js(f"window.__pvLock && window.__pvLock({json.dumps(reasons.get(ev, '已上鎖'))})"))
+
     def on_closing():
+        # 有系統匣時，按 X 只是藏起來（可在設定關閉這個行為）
+        if api._tray and not api._quitting and api.kv_get("closeToTray") is not False:
+            win.hide()
+            return False
         CLIP.clear_if_mine()
+        if api._tray:
+            api._tray.stop()
 
     win.events.closing += on_closing
     webview.start(private_mode=True, icon=str(BASE / "desktop" / "app.ico") if (BASE / "desktop" / "app.ico").exists() else None)

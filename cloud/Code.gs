@@ -50,6 +50,8 @@ function doPost(e) {
       props.setProperty('REV' + sfx, String(rev + 1));
       return out_({ ok: true, rev: rev + 1 });
     }
+    if (req.a === 'backup_info') return out_(backupInfo_());
+    if (req.a === 'backup_now') return out_({ ok: true, files: backupNow_(), info: backupInfo_() });
     if (req.a === 'att_put') return out_(attPut_(sfx, String(req.id || ''), String(req.data || '')));
     if (req.a === 'att_get') return out_(attGet_(sfx, String(req.id || '')));
     if (req.a === 'att_del') return out_(attDel_(sfx, String(req.id || '')));
@@ -147,6 +149,70 @@ function attDel_(sfx, id) {
   var r = attRow_(sh, id);
   if (r) sh.deleteRow(r);
   return { ok: true };
+}
+
+/* ---------- 每週自動備份到 Google 雲端硬碟（.pwvault，一樣是密文） ---------- */
+var KEEP_BACKUPS = 12;
+
+function backupFolder_() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('BACKUP_FOLDER');
+  if (id) {
+    try { if (!Drive.Files.get(id, { fields: 'id,trashed' }).trashed) return id; } catch (e) { }
+  }
+  var f = Drive.Files.create({ name: '帳號密碼紀錄備份', mimeType: 'application/vnd.google-apps.folder' });
+  props.setProperty('BACKUP_FOLDER', f.id);
+  return f.id;
+}
+
+function namespaces_() {
+  var props = PropertiesService.getScriptProperties(), out = [];
+  props.getKeys().forEach(function (k) {
+    if (k === 'REV' && Number(props.getProperty(k)) > 0) out.push('');
+    else if (k.indexOf('REV_') === 0 && Number(props.getProperty(k)) > 0) out.push(k.slice(4));
+  });
+  return out;
+}
+
+function backupNow_() {
+  var folder = backupFolder_(), made = [];
+  var stamp = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd-HHmm');
+  namespaces_().forEach(function (ns) {
+    var v = read_(ns ? '_' + ns : '');
+    if (!v) return;
+    var tag = ns || '個人', name = '帳號密碼備份-' + tag + '-' + stamp + '.pwvault';
+    Drive.Files.create({ name: name, parents: [folder], mimeType: 'application/octet-stream' },
+      Utilities.newBlob(v, 'application/octet-stream', name));
+    made.push(name);
+    // 每個保管庫只留最近 12 份
+    var list = Drive.Files.list({ q: "'" + folder + "' in parents and trashed=false and name contains '-" + tag + "-'",
+      orderBy: 'createdTime desc', fields: 'files(id,name)', pageSize: 100 }).files || [];
+    list.slice(KEEP_BACKUPS).forEach(function (f) { Drive.Files.remove(f.id); });
+  });
+  PropertiesService.getScriptProperties().setProperty('LAST_BACKUP', new Date().toISOString());
+  return made;
+}
+
+function backupInfo_() {
+  var props = PropertiesService.getScriptProperties();
+  var scheduled = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'weeklyBackup'; });
+  var folder = props.getProperty('BACKUP_FOLDER');
+  return { ok: true, scheduled: scheduled, last: props.getProperty('LAST_BACKUP') || '',
+    folderUrl: folder ? 'https://drive.google.com/drive/folders/' + folder : '' };
+}
+
+/** 每週日凌晨 3 點由觸發條件呼叫 */
+function weeklyBackup() {
+  backupNow_();
+}
+
+/** 在編輯器執行一次：授權雲端硬碟、建立每週備份排程，並馬上備份一次 */
+function setupBackup() {
+  if (!ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'weeklyBackup'; })) {
+    ScriptApp.newTrigger('weeklyBackup').timeBased().everyWeeks(1).onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(3).create();
+  }
+  Logger.log('已備份：' + backupNow_().join(', '));
+  Logger.log(JSON.stringify(backupInfo_()));
 }
 
 /** 在編輯器執行一次以授權（不會改資料） */
