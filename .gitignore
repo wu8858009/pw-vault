@@ -1,0 +1,9 @@
+build/
+dist/
+__pycache__/
+*.pyc
+*.spec
+# 絕不提交任何密碼資料
+*.pwvault
+*.csv
+vault*.json
