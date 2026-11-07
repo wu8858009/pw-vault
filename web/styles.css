@@ -317,7 +317,9 @@ svg.i.flip { transform: rotate(180deg); }
   .fr { grid-template-columns: 90px 1fr auto; }
 }
 /* 手機：單欄 */
-@media (max-width: 760px) {
+/* 手機（直向），以及橫向拿的手機（寬但很矮） */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .list .top .menu-btn { display: inline-flex !important; }
   .auth { grid-template-columns: 1fr; }
   .auth-brand { padding: 28px 22px 24px; padding-top: max(28px, env(safe-area-inset-top)); }
   .auth-brand h1 { font-size: 24px; margin-top: 22px; }
@@ -339,10 +341,41 @@ svg.i.flip { transform: rotate(180deg); }
   .fr .k { grid-column: 1 / -1; }
   .hist-row .when { width: auto; }
   .dialog .grid2 { grid-template-columns: 1fr; }
+  /* 手機：對話框改成貼齊螢幕的全版面（底部上滑），不留邊、不超出 */
+  .modal { padding: 0; align-items: flex-end; }
+  .dialog, .dialog.wide { width: 100%; max-height: 100vh; max-height: 100dvh; border-radius: 18px 18px 0 0; padding: 0 16px; border-left: 0; border-right: 0; border-bottom: 0;
+    animation: sheet .22s ease-out; }
+  .dialog.wide { height: 100vh; height: 100dvh; border-radius: 0; padding-top: env(safe-area-inset-top); }
+  .dialog > h3 { margin: 0 -16px 12px; padding: 16px; }
+  .dialog .btns { margin: 16px -16px 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
+  .dialog .btns button { flex: 1; }
+  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
+  .tabs button { padding: 10px 2px; font-size: 13px; white-space: normal; line-height: 1.25; }
+  .dialog section { padding: 12px; }
+  .audit { max-height: none; }
+  .palette-wrap { padding: 0; align-items: stretch; }
+  .palette { border-radius: 0; border: 0; height: 100vh; height: 100dvh; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); }
+  .palette .plist { max-height: none; flex: 1; }
+  .palette .pfoot { display: none; }
+  .list .items { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .dwrap { padding-bottom: calc(40px + env(safe-area-inset-bottom)); padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
+  .formbar { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .formbar button { flex: 1; }
+  .toast { bottom: calc(20px + env(safe-area-inset-bottom)); }
+  .hero .av { width: 46px; height: 46px; font-size: 19px; }
+  .hero h2 { font-size: 18px; }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .kpi .kv { font-size: 24px; }
   .grid-2 { grid-template-columns: 1fr; }
   .tpick { grid-template-columns: repeat(2, 1fr); }
   .cfrow { grid-template-columns: 1fr 1fr; }
   .health { flex-wrap: wrap; }
-  .palette-wrap { padding-top: max(16px, env(safe-area-inset-top)); }
 }
-@media (min-width: 761px) { .menu-btn { display: none !important; } }
+.menu-btn { display: none !important; }
+@keyframes sheet { from { transform: translateY(40px); opacity: 0; } }
+/* 觸控裝置：輸入框至少 16px，iPhone 才不會點進去就自動放大整頁 */
+@media (pointer: coarse), (max-width: 760px) {
+  input, select, textarea { font-size: 16px; }
+  .list .bar select { font-size: 14px; }
+  html, body { overflow-x: hidden; }
+}
