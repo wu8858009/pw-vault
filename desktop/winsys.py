@@ -68,7 +68,8 @@ def send_text(text: str):
 def send_key(name: str):
     vk = VK[name]
     _send([_key(vk), _key(vk, 0, KEYEVENTF_KEYUP)])
-    time.sleep(0.05)
+    # 網頁常在換欄位時跑程式（自動完成、查門市…），多等一下再打下一段
+    time.sleep(0.15)
 
 
 def run_sequence(items):
@@ -105,8 +106,33 @@ def bring_front(hwnd):
             u32.AttachThreadInput(a, b, False)
 
 
-def autotype(own, target, items, delay):
-    """縮小自己 → 切到目標視窗（或等 delay 秒讓使用者點欄位）→ 打字。"""
+u32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+u32.GetAsyncKeyState.restype = ctypes.c_short
+
+
+def _lbutton_down():
+    return bool(u32.GetAsyncKeyState(0x01) & 0x8000)
+
+
+def wait_click(own, timeout):
+    """等使用者在「別的視窗」按一下滑鼠左鍵（放開後）並回傳那個視窗；逾時回傳 None。"""
+    end = time.time() + timeout
+    while _lbutton_down() and time.time() < end:
+        time.sleep(0.02)
+    while time.time() < end:
+        if _lbutton_down():
+            while _lbutton_down():
+                time.sleep(0.02)
+            fg = u32.GetForegroundWindow()
+            if fg and fg != own:
+                return fg
+        time.sleep(0.02)
+    return None
+
+
+def autotype(own, target, items, timeout=20, on_done=None):
+    """縮小自己 → 切回快速鍵前的視窗；沒有的話等使用者點一下目標欄位 → 打字。
+    絕不在「縮小後剛好跑到前面的視窗」盲打，避免打進錯的程式。"""
     if own:
         u32.ShowWindow(own, SW_MINIMIZE)
     if target and u32.IsWindow(target) and target != own:
@@ -114,8 +140,16 @@ def autotype(own, target, items, delay):
         bring_front(target)
         time.sleep(0.35)
     else:
-        time.sleep(max(0.5, min(float(delay or 3), 10)))
+        if not wait_click(own, timeout):
+            if own:
+                bring_front(own)
+            if on_done:
+                on_done(False)
+            return False
+        time.sleep(0.3)
     run_sequence(items)
+    if on_done:
+        on_done(True)
     return True
 
 

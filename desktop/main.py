@@ -312,12 +312,17 @@ class Api:
             webbrowser.open(url)
 
     # ----- 自動輸入 / 全域快速鍵 -----
-    def autotype(self, items, use_prev=True, delay=3):
+    def autotype(self, items, use_prev=True, timeout=20):
+        """use_prev：快速鍵叫出時，打回原本的視窗；否則等使用者點一下目標欄位"""
         own = winsys.own_hwnd(APP_NAME)
         target = self._hotkey.prev if (use_prev and self._hotkey) else None
         if self._hotkey:
             self._hotkey.prev = None
-        threading.Thread(target=winsys.autotype, args=(own, target, items, delay), daemon=True).start()
+
+        def done(ok):
+            if not ok and self._window:
+                self._window.evaluate_js("window.__pvAutotypeTimeout && window.__pvAutotypeTimeout()")
+        threading.Thread(target=winsys.autotype, args=(own, target, items, timeout, done), daemon=True).start()
         return {"target": bool(target)}
 
     def hotkey_info(self):
